@@ -27,7 +27,10 @@ RESERVED_DST = [
     TAILNET_V4,
 ]
 
-POLICIES = ("proxy", "direct", "block")
+BUILTIN_POLICIES = ("proxy", "direct", "block")
+# Profile and upstream names become Xray outbound tags and appear in the
+# generated config, so keep them boring.
+NAME_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
 
 
 class ConfigError(Exception):
@@ -128,6 +131,99 @@ class Config:
                         "DNS to resolve the DNS server, which cannot work at boot."
                     )
 
+        # ---- upstreams ------------------------------------------------------
+        # Extra Xray servers that profiles can route selected traffic through
+        # (a work VPN, a second exit country, ...).
+        self.upstreams: dict[str, dict] = {}
+        for i, u in enumerate(raw.get("upstream", [])):
+            where = f"upstream[{i}]"
+            name = u.get("name", "")
+            if not NAME_RE.match(str(name)):
+                raise ConfigError(
+                    f"{where}.name {name!r} must be 1-24 chars of lowercase "
+                    "letters, digits or dashes"
+                )
+            if name in self.upstreams:
+                raise ConfigError(f"{where}: duplicate upstream name {name!r}")
+            if name in BUILTIN_POLICIES:
+                raise ConfigError(
+                    f"{where}.name {name!r} is reserved — it is a built-in route target"
+                )
+            server = self._server(u, where)
+            server["tag"] = f"up-{name}"
+            self.upstreams[name] = server
+
+        # Where a profile rule may send traffic.
+        self.route_targets = {
+            **{n: s["tag"] for n, s in self.upstreams.items()},
+            "proxy": "proxy",
+            "direct": "direct",
+            "block": "block",
+        }
+
+        # ---- profiles -------------------------------------------------------
+        # A profile is a built-in policy plus destination-specific exceptions:
+        # "behave like `base`, except send these domains/networks via X".
+        self.profiles: dict[str, dict] = {}
+        for i, pr in enumerate(raw.get("profile", [])):
+            where = f"profile[{i}]"
+            name = pr.get("name", "")
+            if not NAME_RE.match(str(name)):
+                raise ConfigError(
+                    f"{where}.name {name!r} must be 1-24 chars of lowercase "
+                    "letters, digits or dashes"
+                )
+            if name in BUILTIN_POLICIES:
+                raise ConfigError(f"{where}.name {name!r} is a built-in policy name")
+            if name in self.upstreams:
+                raise ConfigError(
+                    f"{where}.name {name!r} is already an upstream name — "
+                    "profiles and upstreams share a namespace"
+                )
+            if name in self.profiles:
+                raise ConfigError(f"{where}: duplicate profile name {name!r}")
+
+            base = pr.get("base", "proxy")
+            if base not in ("proxy", "direct"):
+                raise ConfigError(
+                    f"{where}.base must be 'proxy' or 'direct' (got {base!r}). "
+                    "A profile that blocked everything would have nothing to route."
+                )
+
+            routes = []
+            for j, r in enumerate(pr.get("route", [])):
+                rwhere = f"{where}.route[{j}]"
+                via = r.get("via")
+                if via not in self.route_targets:
+                    known = ", ".join(sorted(self.route_targets))
+                    raise ConfigError(
+                        f"{rwhere}.via {via!r} is not a known target. "
+                        f"Expected one of: {known}"
+                    )
+                domains = list(r.get("domains", []))
+                ips = list(r.get("ips", []))
+                if not domains and not ips:
+                    raise ConfigError(
+                        f"{rwhere} matches nothing — give it `domains`, `ips`, or both"
+                    )
+                for cidr in ips:
+                    if not str(cidr).startswith("geoip:"):
+                        _net(cidr, f"{rwhere}.ips")
+                routes.append(
+                    {"via": via, "tag": self.route_targets[via],
+                     "domains": domains, "ips": ips}
+                )
+            if not routes:
+                raise ConfigError(
+                    f"{where} has no [[profile.route]] rules, so it is just "
+                    f"policy = {base!r}. Use the built-in policy instead."
+                )
+            self.profiles[name] = {"base": base, "routes": routes}
+
+        self.policies = tuple(BUILTIN_POLICIES) + tuple(self.profiles)
+        # Every profile needs its traffic in front of Xray to be split at all.
+        self.intercepted = {"proxy", *self.profiles}
+
         # ---- clients --------------------------------------------------------
         # A bare `default_policy = ...` written after any [table] is parsed as a
         # key of THAT table, so it silently does nothing. That is exactly what
@@ -144,9 +240,10 @@ class Config:
         self.default_policy = raw.get("policy", {}).get(
             "default", raw.get("default_policy", "proxy")
         )
-        if self.default_policy not in POLICIES:
+        if self.default_policy not in self.policies:
             raise ConfigError(
-                f"policy.default must be one of {POLICIES}, not {self.default_policy!r}"
+                f"policy.default must be one of {', '.join(self.policies)}, "
+                f"not {self.default_policy!r}"
             )
 
         self.clients = []
@@ -155,8 +252,11 @@ class Config:
             where = f"client[{i}]"
             ip = _ip(_need(c, "ip", where), f"{where}.ip")
             pol = c.get("policy", self.default_policy)
-            if pol not in POLICIES:
-                raise ConfigError(f"{where}.policy must be one of {POLICIES}")
+            if pol not in self.policies:
+                raise ConfigError(
+                    f"{where}.policy {pol!r} is not defined. Known policies: "
+                    f"{', '.join(self.policies)}"
+                )
             if ip in seen:
                 raise ConfigError(f"{where}: duplicate client ip {ip}")
             if ipaddress.ip_address(ip) not in self.lan:
@@ -287,12 +387,21 @@ class Config:
 
     @property
     def proxy_sources(self) -> list[str]:
-        """Sources that get intercepted, including the tailnet when we proxy
-        exit-node egress."""
-        s = self.clients_by("proxy")
+        """Sources that get intercepted: plain proxy clients and every profile
+        client, since splitting a profile by destination requires Xray to see
+        the traffic. Plus the tailnet when exit-node egress is proxied."""
+        s = [c["ip"] for c in self.clients if c["policy"] in self.intercepted]
         if self.ts_enabled and self.ts_proxy_egress:
             s.append(TAILNET_V4)
         return s
+
+    def profile_sources(self, name: str) -> list[str]:
+        """Which source addresses this profile applies to. When the profile is
+        also the LAN default, that includes every unlisted device."""
+        srcs = self.clients_by(name)
+        if self.default_policy == name:
+            srcs.append(self.lan_cidr)
+        return srcs
 
     @property
     def bypass_dst(self) -> list[str]:

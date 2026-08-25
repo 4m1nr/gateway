@@ -68,7 +68,9 @@ def render_nft(cfg: Config) -> str:
     # true. It matches $LAN in the forward path only, so it applies to exactly
     # the devices that opted in — a device using the router as its gateway
     # never sends a packet through this chain.
-    if cfg.default_policy == "proxy":
+    # A profile is intercepted exactly like a plain proxy client: splitting
+    # traffic by destination requires Xray to see it.
+    if cfg.default_policy in cfg.intercepted:
         pre_default = (
             "        meta l4proto { tcp, udp } ip saddr $LAN \\\n"
             "            meta mark set $MARK_TPROXY "
@@ -194,6 +196,10 @@ def render_env(cfg: Config) -> str:
             f"UI_PORT={cfg.ui_port}",
             f"DNS_PORT={cfg.dns_port}",
             f"DEFAULT_POLICY={cfg.default_policy}",
+            # Consumed by `gw client` and the dashboard so both offer exactly
+            # the policies this config defines.
+            f"POLICIES={','.join(cfg.policies)}",
+            f"PROFILES={','.join(cfg.profiles)}",
             "",
         ]
     )

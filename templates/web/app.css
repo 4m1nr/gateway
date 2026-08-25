@@ -77,6 +77,7 @@ td.addr { font-family: var(--mono); }
 .badge.proxy  { color: var(--accent); border-color: var(--accent); }
 .badge.direct { color: var(--warn);   border-color: var(--warn); }
 .badge.block  { color: var(--bad);    border-color: var(--bad); }
+.badge.profile { color: var(--fg); border-color: var(--fg); }
 .badge.ok     { color: var(--ok);     border-color: var(--ok); }
 .badge.bad    { color: var(--bad);    border-color: var(--bad); }
 

@@ -166,6 +166,10 @@ def _outbounds(cfg: Config) -> list:
     outs = [_outbound(cfg.server, cfg.outbound_mark, "proxy")]
     if cfg.fallback:
         outs.append(_outbound(cfg.fallback, cfg.outbound_mark, "fallback"))
+    # Named upstreams: extra servers that profiles can route selected traffic
+    # through. Same XHTTP builder, same SO_MARK loop guard.
+    for name, server in cfg.upstreams.items():
+        outs.append(_outbound(server, cfg.outbound_mark, server["tag"]))
     outs += [
         {
             "tag": "direct",
@@ -207,12 +211,42 @@ def _routing(cfg: Config) -> dict:
             {"type": "field", "source": direct_clients, "outboundTag": "direct"}
         )
 
+    # Profile exceptions come before the global geo split: "send corp.example.ir
+    # through the work upstream" has to beat "all .ir goes direct", because the
+    # per-device rule is the more specific statement.
+    for name, profile in cfg.profiles.items():
+        sources = cfg.profile_sources(name)
+        if not sources:
+            continue
+        for route in profile["routes"]:
+            if route["domains"]:
+                rules.append({
+                    "type": "field", "source": sources,
+                    "domain": route["domains"], "outboundTag": route["tag"],
+                })
+            if route["ips"]:
+                rules.append({
+                    "type": "field", "source": sources,
+                    "ip": route["ips"], "outboundTag": route["tag"],
+                })
+
     if cfg.direct_geosite:
         rules.append(
             {"type": "field", "domain": cfg.direct_geosite, "outboundTag": "direct"}
         )
     if cfg.direct_geoip:
         rules.append({"type": "field", "ip": cfg.direct_geoip, "outboundTag": "direct"})
+
+    # Then each profile's fallthrough. After the geo rules, so a profile client
+    # still gets the domestic-direct split for everything its own rules did not
+    # claim.
+    for name, profile in cfg.profiles.items():
+        sources = cfg.profile_sources(name)
+        if sources:
+            rules.append({
+                "type": "field", "source": sources,
+                "outboundTag": profile["base"],
+            })
 
     routing = {"domainStrategy": cfg.domain_strategy, "rules": rules}
 

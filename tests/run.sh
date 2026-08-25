@@ -108,6 +108,48 @@ print(gwconfig.load('$f').default_policy)")
     ok "$name: box and router excluded from the catch-all"
   else bad "$name: box/router not excluded — the catch-all can capture them"; fi
 
+  # ---- profiles ----
+  # Rule ORDER is the whole semantic: Xray takes the first match, so an
+  # exception below the geo split silently stops working.
+  if out=$(python3 tests/check_routing.py "$OUT/$name/usr/local/etc/xray/config.json" 2>&1); then
+    ok "$name: routing order — ${out#ok: }"
+  else bad "$name: $out"; fi
+
+  profiles=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+c=gwconfig.load('$f');print(','.join(c.profiles))")
+  if [ -n "$profiles" ]; then
+    xj="$OUT/$name/usr/local/etc/xray/config.json"
+    ups=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print(','.join(gwconfig.load('$f').upstreams))")
+    missing=""
+    for u in ${ups//,/ }; do
+      grep -q "\"up-$u\"" "$xj" || missing="$missing $u"
+    done
+    if [ -z "$missing" ]; then ok "$name: every upstream has an outbound"
+    else bad "$name: no outbound generated for upstream:$missing"; fi
+
+    # A profile client must be intercepted, or there is nothing to split.
+    unintercepted=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+c=gwconfig.load('$f')
+srcs=set(c.proxy_sources)
+print(','.join(x['ip'] for x in c.clients if x['policy'] in c.profiles and x['ip'] not in srcs))")
+    if [ -z "$unintercepted" ]; then ok "$name: all profile clients are intercepted"
+    else bad "$name: profile clients not intercepted: $unintercepted"; fi
+
+    # Every route target must resolve to a real outbound tag.
+    if python3 -c "
+import json,sys;sys.path.insert(0,'lib');import gwconfig
+c=gwconfig.load('$f'); d=json.load(open('$xj'))
+tags={o['tag'] for o in d['outbounds']} | {'api'}
+bad=[r['tag'] for p in c.profiles.values() for r in p['routes'] if r['tag'] not in tags]
+sys.exit(1 if bad else 0)"; then
+      ok "$name: every profile route points at a real outbound"
+    else bad "$name: a profile route names an outbound that does not exist"; fi
+  fi
+
   # ---- web dashboard ----
   web=$(python3 -c "
 import sys;sys.path.insert(0,'lib');import gwconfig

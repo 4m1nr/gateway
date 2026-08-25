@@ -94,11 +94,7 @@
       <input type="text" id="add-ip" placeholder="192.168.1.60" required
              pattern="^\d{1,3}(\.\d{1,3}){3}$">
       <input type="text" id="add-name" placeholder="name" required maxlength="32">
-      <select id="add-policy">
-        <option value="direct">direct — bypass the tunnel</option>
-        <option value="proxy">proxy — force through the tunnel</option>
-        <option value="block">block — drop at the gateway</option>
-      </select>
+      <select id="add-policy"></select>
       <button type="submit" class="secondary">Add override</button>
     </form>
     <p class="error hidden" id="client-error"></p>

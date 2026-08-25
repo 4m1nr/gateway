@@ -32,7 +32,7 @@ import time
 
 ENV = "/usr/local/lib/gateway/env"
 RUN = pathlib.Path("/run/gateway")
-POLICIES = ("proxy", "direct", "block")
+BUILTIN_POLICIES = ("proxy", "direct", "block")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}$")
 STACK = ("gateway.target", "gw-network.service", "xray.service",
          "AdGuardHome.service", "tailscaled.service", "gw-web.service",
@@ -100,9 +100,21 @@ def valid_name(raw) -> str:
     return raw.strip()
 
 
+def policies() -> tuple[str, ...]:
+    """Built-ins plus this config's profiles, as rendered into the env file.
+
+    Read here rather than trusted from the request: the web process must not be
+    able to widen the set of policies it may assign.
+    """
+    raw = E.get("POLICIES", "")
+    names = tuple(p for p in raw.split(",") if p)
+    return names or BUILTIN_POLICIES
+
+
 def valid_policy(raw) -> str:
-    if raw not in POLICIES:
-        fail(f"policy must be one of {', '.join(POLICIES)}")
+    allowed = policies()
+    if raw not in allowed:
+        fail(f"policy must be one of {', '.join(allowed)}")
     return raw
 
 
@@ -199,13 +211,19 @@ def act_clients() -> dict:
     if rc != 0:
         fail(err.strip() or "could not read the client list")
     clients = []
+    known = policies()
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) >= 2 and parts[1] in POLICIES:
+        if len(parts) >= 2 and parts[1] in known:
             clients.append(
                 {"ip": parts[0], "policy": parts[1], "name": " ".join(parts[2:])}
             )
-    return {"clients": clients, "default_policy": E.get("DEFAULT_POLICY", "proxy")}
+    return {
+        "clients": clients,
+        "default_policy": E.get("DEFAULT_POLICY", "proxy"),
+        "policies": list(known),
+        "profiles": [p for p in E.get("PROFILES", "").split(",") if p],
+    }
 
 
 def act_client_add(req: dict) -> dict:

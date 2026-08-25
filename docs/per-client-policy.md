@@ -40,6 +40,7 @@ regardless of what the default is.
 | `proxy` | intercepted; split routing applies |
 | `direct` | forwarded straight to the router, never touched |
 | `block` | dropped at the gateway |
+| *profile name* | intercepted; the profile's own rules apply first (see below) |
 
 ## The default
 
@@ -92,10 +93,80 @@ or the router's own address is refused rather than rendered into a ruleset.
 Tailscale exit node is proxied like a LAN client. Set it to `false` and exit-node
 traffic goes out through your ISP instead.
 
-## Different routing per client
+## Profiles
 
-The current design gives every proxied client the same split. To send one client
-through a different outbound, add a `source`-matched rule ahead of the geo rules
-in `lib/xray_config.py`'s `_routing()` — Xray sees the real client IP because
-`dokodemo-door` preserves it. That's a code change, not a config toggle; it was
-left out until there's a concrete need for it.
+A profile says: *behave like `base`, except send these destinations somewhere
+else.* The motivating case is a work laptop whose corporate ranges and domains
+must go through a work Xray server while the rest of its traffic takes the
+normal tunnel.
+
+```toml
+[[upstream]]
+name    = "work"
+address = "vpn.work.example"
+port    = 443
+uuid    = "..."
+path    = "/xhttp"
+security = "tls"
+
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+
+  [[profile.route]]
+  via     = "work"
+  domains = ["domain:corp.work.example", "domain:jira.work.example"]
+  ips     = ["10.20.0.0/16", "203.0.113.0/24"]
+
+  [[profile.route]]
+  via     = "block"
+  domains = ["geosite:category-ads-all"]
+
+[[client]]
+ip     = "192.168.1.70"
+name   = "work-laptop"
+policy = "work-laptop"
+```
+
+`via` accepts any `[[upstream]]` name plus the three built-in targets
+(`proxy`, `direct`, `block`), so a profile can force something through the main
+tunnel, force it direct, or drop it — per device.
+
+`base` is `proxy` or `direct` only. A `block` base would leave nothing to route.
+
+### Rule order is the behaviour
+
+Xray takes the first matching rule. The generated order is:
+
+```
+1. blocked clients
+2. direct clients
+3. profile exceptions          ← most specific
+4. global geo split (.ir direct)
+5. profile fallthrough (base)
+6. global default
+```
+
+Exceptions sit **above** the geo split so `corp.example.ir` still reaches the
+work upstream instead of losing to "all `.ir` goes direct". The fallthrough sits
+**below** it so a profile client keeps normal domestic-direct routing for
+everything its own rules didn't claim.
+
+`tests/check_routing.py` asserts both relative positions, because getting this
+wrong produces no error — just traffic quietly leaving by the wrong door.
+
+### Profiles are always intercepted
+
+Even with `base = "direct"`. Splitting by destination requires Xray to see the
+traffic — domain rules need the TLS SNI, which only sniffing recovers. So a
+profile device behaves like a proxied one for kill-switch purposes: if the
+tunnel is down it loses connectivity rather than falling back to a direct path.
+
+If you want a device that is genuinely untouched, use `policy = "direct"`; it
+never reaches Xray at all.
+
+### Naming
+
+Profile and upstream names share one namespace and become Xray outbound tags:
+lowercase letters, digits and dashes, up to 24 characters. `proxy`, `direct` and
+`block` are reserved.

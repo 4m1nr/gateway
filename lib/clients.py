@@ -11,11 +11,26 @@ import ipaddress
 import pathlib
 import re
 import sys
+import tomllib
 
-POLICIES = ("proxy", "direct", "block")
+BUILTIN = ("proxy", "direct", "block")
+
+
+def valid_policies(path: pathlib.Path) -> tuple[str, ...]:
+    """Built-ins plus whatever profiles this config defines."""
+    try:
+        with path.open("rb") as fh:
+            raw = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        return BUILTIN
+    names = [p["name"] for p in raw.get("profile", []) if isinstance(p, dict) and "name" in p]
+    return BUILTIN + tuple(names)
 BLOCK = re.compile(
     r'\n?\[\[client\]\]\nip     = "(?P<ip>[^"]+)"\nname   = "(?P<name>[^"]*)"\n'
-    r'policy = "(?P<policy>\w+)"\n'
+    # [\w-] not \w: profile names may contain hyphens, and \w silently fails to
+    # match them — which made profile clients invisible to list/rm and caused
+    # add to duplicate instead of replace.
+    r'policy = "(?P<policy>[\w-]+)"\n'
 )
 
 
@@ -28,20 +43,28 @@ def read(path: pathlib.Path) -> str:
 def cmd_list(path: pathlib.Path) -> int:
     text = read(path)
     rows = [(m["ip"], m["name"], m["policy"]) for m in BLOCK.finditer(text)]
+    profiles = [p for p in valid_policies(path) if p not in BUILTIN]
+    if profiles:
+        print(f"# profiles available: {', '.join(profiles)}\n")
     if not rows:
-        print("no clients configured (everything using this box as its gateway "
-              "gets default_policy)")
+        print("no overrides configured — every device using this box as its "
+              "gateway gets [policy].default")
         return 0
-    width = max(len(r[0]) for r in rows)
+    ipw = max(len(r[0]) for r in rows)
+    polw = max(len(r[2]) for r in rows)
     for ip, name, policy in sorted(rows, key=lambda r: ipaddress.ip_address(r[0])):
-        print(f"{ip:<{width}}  {policy:<6}  {name}")
+        print(f"{ip:<{ipw}}  {policy:<{polw}}  {name}")
     return 0
 
 
 def cmd_add(path: pathlib.Path, ip: str, name: str, policy: str) -> int:
     ipaddress.ip_address(ip)
-    if policy not in POLICIES:
-        sys.exit(f"policy must be one of {', '.join(POLICIES)}")
+    allowed = valid_policies(path)
+    if policy not in allowed:
+        sys.exit(
+            f"policy {policy!r} is not defined. Known policies: {', '.join(allowed)}\n"
+            "Profiles are declared with [[profile]] in gateway.toml."
+        )
     text = read(path)
     for m in BLOCK.finditer(text):
         if m["ip"] == ip:
@@ -76,7 +99,8 @@ def main(argv: list[str]) -> int:
         return cmd_list(path)
     if cmd == "add":
         if len(rest) < 2:
-            sys.exit("usage: gw client add <ip> <name> [proxy|direct|block]")
+            allowed = " | ".join(valid_policies(path))
+            sys.exit(f"usage: gw client add <ip> <name> [{allowed}]")
         return cmd_add(path, rest[0], rest[1], rest[2] if len(rest) > 2 else "proxy")
     if cmd == "rm":
         if len(rest) != 1:

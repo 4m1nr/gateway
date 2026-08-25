@@ -70,6 +70,44 @@ override is keyed to the address. Change the default itself in `gateway.toml`:
 default = "proxy"   # or "direct" / "block"
 ```
 
+### Profiles
+
+A profile is a built-in policy **plus destination-specific exceptions** — for
+sending work traffic through a work Xray server while everything else takes the
+normal path:
+
+```toml
+[[upstream]]                       # a second Xray server
+name    = "work"
+address = "vpn.work.example"
+uuid    = "..."
+path    = "/xhttp"
+
+[[profile]]
+name = "work-laptop"
+base = "proxy"                     # unmatched traffic behaves like `proxy`
+
+  [[profile.route]]
+  via     = "work"                 # an upstream name, or proxy/direct/block
+  domains = ["domain:corp.work.example"]
+  ips     = ["10.20.0.0/16"]
+```
+
+```bash
+gw client add 192.168.1.70 laptop work-laptop
+sudo gw apply
+```
+
+Rules are matched most-specific-first, so a profile rule beats the global
+domestic-direct split — work domains under `.ir` still reach the work upstream.
+Xray takes the first matching rule, so that ordering *is* the behaviour, and
+`tests/check_routing.py` asserts it.
+
+**A profile device is always intercepted, even with `base = "direct"`** —
+splitting traffic by destination requires Xray to see it. So it is fail-closed
+like any proxied device: if the tunnel dies it loses connectivity rather than
+falling back to a direct path. That is the cost of the split, not a bug.
+
 See `docs/per-client-policy.md`.
 
 ## Commands
@@ -182,7 +220,7 @@ Two layers decide what happens to a packet:
 | Layer | Decides |
 |---|---|
 | nftables | *whether* a client is intercepted — listed overrides first, then a LAN-wide catch-all |
-| Xray routing | *where* an intercepted flow goes (proxy / direct / block) |
+| Xray routing | *where* an intercepted flow goes — profile exceptions, then the geo split, then the profile's base |
 
 **Interception.** `prerouting` checks the explicit override sets first, then
 falls through to a catch-all on the LAN CIDR. It matches traffic and hands

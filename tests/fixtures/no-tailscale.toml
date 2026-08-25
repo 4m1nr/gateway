@@ -79,6 +79,56 @@ enabled = false
 # Same keys as [xray.server].
 
 # ============================================================================
+#  Extra upstreams
+#
+#  More Xray servers that profiles can send selected traffic through — a work
+#  VPN, a second exit country. Same fields as [xray.server]. `name` becomes an
+#  outbound tag, so keep it to lowercase letters, digits and dashes.
+# ============================================================================
+# [[upstream]]
+# name        = "work"
+# address     = "vpn.work.example"
+# port        = 443
+# uuid        = "..."
+# path        = "/xhttp"
+# mode        = "auto"
+# security    = "tls"
+# sni         = "vpn.work.example"
+# fingerprint = "chrome"
+
+# ============================================================================
+#  Profiles
+#
+#  A profile is a built-in policy plus destination-specific exceptions:
+#  "behave like `base`, except send these domains/networks via somewhere else".
+#  Assign one to a device with policy = "<profile name>".
+#
+#  base = "proxy" | "direct"   what unmatched traffic does
+#  via  = an [[upstream]] name, or "proxy" / "direct" / "block"
+#
+#  Rules are matched most-specific-first: a profile rule beats the global
+#  domestic-direct split, so work domains under .ir still reach the work
+#  upstream.
+#
+#  NOTE: a profile device is always intercepted, even with base = "direct" —
+#  splitting traffic by destination requires Xray to see it. So a profile
+#  device is fail-closed like any proxied one: if the tunnel dies, it loses
+#  connectivity rather than falling back to a direct path.
+# ============================================================================
+# [[profile]]
+# name = "work-laptop"
+# base = "proxy"
+#
+#   [[profile.route]]
+#   via     = "work"
+#   domains = ["domain:corp.work.example", "domain:jira.work.example"]
+#   ips     = ["10.20.0.0/16", "203.0.113.0/24"]
+#
+#   [[profile.route]]
+#   via     = "block"
+#   domains = ["geosite:category-ads-all"]
+
+# ============================================================================
 #  Split routing — what goes direct vs through the tunnel
 # ============================================================================
 [routing]
@@ -116,6 +166,7 @@ statslog_days = 7
 #  policy = "proxy"   intercepted and sent through Xray (split rules apply)
 #           "direct"  forwarded straight out to the router, never touched
 #           "block"   dropped at the gateway
+#           "<name>"  any profile declared above
 #
 #  Listing a device here is how you OVERRIDE the default. Any device that
 #  points its default gateway at this box gets [policy].default without being
@@ -168,6 +219,38 @@ route_control_via_xray = true
 # After this many minutes of sustained tunnel failure, let tailscaled talk
 # direct so you can still SSH in and fix things. 0 disables the lifeline.
 lifeline_after_min = 10
+
+# ============================================================================
+#  Web dashboard
+#
+#  Status + client management, served by the box itself. Three independent
+#  gates, because this thing can change the firewall:
+#    1. nftables only accepts the port from allow_cidrs
+#    2. the app re-checks the peer address against allow_cidrs
+#    3. a password (set with `gw web-passwd`, scrypt-hashed outside the repo)
+#
+#  The peer address comes from the socket. X-Forwarded-For is deliberately
+#  ignored — nothing proxies this, so a header claiming otherwise is a lie.
+# ============================================================================
+[web]
+enabled = true
+listen  = "0.0.0.0"
+port    = 8088
+
+# Self-signed by default (scripts/40-web.sh generates it). Your browser will
+# warn once. It is worth it: the login password crosses the LAN otherwise.
+# A LAN attacker can still substitute their own cert and you would click
+# through — reach it over Tailscale if that matters to you.
+tls  = true
+cert = "/etc/gateway/web.crt"
+key  = "/etc/gateway/web.key"
+
+# Who may reach the dashboard at all. Empty = lan_cidr + the tailnet.
+allow_cidrs = []
+
+session_hours     = 12
+max_failed_logins = 5
+lockout_minutes   = 15
 
 # ============================================================================
 #  Health watchdog

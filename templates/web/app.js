@@ -80,7 +80,28 @@ function renderStatus(s) {
     : `<tr><td class="muted">no counters yet</td></tr>`;
 }
 
+const POLICY_HINT = {
+  proxy:  "force through the tunnel",
+  direct: "bypass the tunnel",
+  block:  "drop at the gateway",
+};
+
+function renderPolicyOptions(data) {
+  // Built from the config's actual policies, so profiles appear here without
+  // the page knowing anything about them.
+  const sel = $("add-policy");
+  const current = sel.value;
+  const profiles = new Set(data.profiles || []);
+  sel.innerHTML = (data.policies || ["proxy", "direct", "block"])
+    .map((p) => {
+      const hint = profiles.has(p) ? "profile" : POLICY_HINT[p] || "";
+      return `<option value="${escapeHtml(p)}">${escapeHtml(p)}${hint ? " — " + hint : ""}</option>`;
+    }).join("");
+  if (current) sel.value = current;
+}
+
 function renderClients(data) {
+  renderPolicyOptions(data);
   const body = $("clients").querySelector("tbody");
   text($("clients-note"),
     `Default is "${data.default_policy}" — any device that points its gateway at ` +

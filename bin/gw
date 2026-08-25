@@ -259,7 +259,10 @@ cmd_status() {
     defpol=$(sed -n 's/^DEFAULT_POLICY=//p' /usr/local/lib/gateway/env 2>/dev/null)
     printf '%s  default         : %s (any device whose gateway is this box)%s\n' \
       "$c_dim" "${defpol:-?}" "$c_off"
-    printf '%s  listed proxied  : %s%s\n' "$c_dim" "${proxied:-none}" "$c_off"
+    printf '%s  intercepted     : %s%s\n' "$c_dim" "${proxied:-none}" "$c_off"
+    local profs
+    profs=$(sed -n 's/^PROFILES=//p' /usr/local/lib/gateway/env 2>/dev/null)
+    [ -n "$profs" ] && printf '%s  profiles        : %s%s\n' "$c_dim" "$profs" "$c_off"
     printf '%s  killswitch drops: %s%s\n' "$c_dim" "${drops:-0}" "$c_off"
   else
     printf 'firewall    %snot loaded%s\n' "$c_red" "$c_off"

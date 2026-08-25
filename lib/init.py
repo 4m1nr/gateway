@@ -159,7 +159,7 @@ def main(repo: str, config: str) -> int:
     # The example ships two illustrative clients; they are almost certainly not
     # this LAN's devices.
     template = re.sub(
-        r'\[\[client\]\]\nip     = "192\.168\.1\.\d+"\nname   = "[^"]+"\npolicy = "\w+"\n\n?',
+        r'\[\[client\]\]\nip     = "192\.168\.1\.\d+"\nname   = "[^"]+"\npolicy = "[\w-]+"\n\n?',
         "",
         template,
     )
