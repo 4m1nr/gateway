@@ -141,6 +141,20 @@ cmd_apply() {
       || die "generated sudoers file is invalid — refusing to install it"
   fi
 
+  # Debian's nftables.service loads /etc/nftables.conf, which begins with
+  # `flush ruleset` — it would wipe our table out from under gw-network, which
+  # stays "active" (Type=oneshot, RemainAfterExit) while its rules quietly
+  # vanish. Two units cannot both own the ruleset; gw-network owns it.
+  if systemctl cat nftables.service >/dev/null 2>&1; then
+    if systemctl is-enabled --quiet nftables.service 2>/dev/null \
+       || systemctl is-active --quiet nftables.service 2>/dev/null; then
+      warn "nftables.service is active/enabled; it flushes the whole ruleset."
+      warn "Masking it — gw-network manages /etc/nftables.d/gateway.nft instead."
+      systemctl disable --now nftables.service >/dev/null 2>&1 || true
+      systemctl mask nftables.service >/dev/null 2>&1 || true
+    fi
+  fi
+
   info "validating the ruleset before loading it"
   nft -c -f "$NFT_LIVE" || die "nftables ruleset rejected — nothing was reloaded"
 
@@ -303,8 +317,12 @@ cmd_status() {
     local proxied drops
     proxied=$(nft list set inet gateway proxy_clients 2>/dev/null \
               | sed -n 's/.*elements = { \(.*\) }.*/\1/p')
+    # There are two killswitch rules (listed clients and the LAN catch-all), so
+    # sum them — printf would otherwise reuse its format for the second value
+    # and emit a stray line.
     drops=$(nft list chain inet gateway forward 2>/dev/null \
-            | grep killswitch | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+')
+            | grep killswitch | grep -oE 'packets [0-9]+' \
+            | awk '{s += $2} END {print s + 0}')
     local defpol
     defpol=$(gw_env DEFAULT_POLICY)
     printf '%s  default         : %s (any device whose gateway is this box)%s\n' \

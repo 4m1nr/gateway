@@ -28,6 +28,16 @@ apt-get install -y --no-install-recommends \
 
 apt_proxy_off
 
+# Installing the nftables package can enable nftables.service, which loads
+# /etc/nftables.conf starting with `flush ruleset`. That would erase the
+# gateway's table while gw-network still reports active, which is a miserable
+# thing to debug. gw-network owns the ruleset here.
+if systemctl cat nftables.service >/dev/null 2>&1; then
+  info "masking nftables.service (gw-network owns the ruleset)"
+  systemctl disable --now nftables.service >/dev/null 2>&1 || true
+  systemctl mask nftables.service >/dev/null 2>&1 || true
+fi
+
 TZ=$(sed -n 's/^timezone *= *"\(.*\)"/\1/p' "$CONFIG" | head -1)
 if [ -n "$TZ" ]; then
   info "timezone -> $TZ"

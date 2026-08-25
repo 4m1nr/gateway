@@ -68,6 +68,16 @@ sec "plumbing"
 if nft list table inet gateway >/dev/null 2>&1; then ok "nftables table loaded"
 else bad "nftables table inet gateway is NOT loaded — nothing is intercepted"; fi
 
+# Two units managing one ruleset is a silent, intermittent failure: the table
+# disappears while gw-network still reports active.
+if systemctl cat nftables.service >/dev/null 2>&1 \
+   && ! systemctl is-enabled nftables.service 2>/dev/null | grep -q masked \
+   && systemctl is-enabled --quiet nftables.service 2>/dev/null; then
+  bad "nftables.service is enabled — it flushes the ruleset and will erase the gateway table"
+else
+  ok "nftables.service is not competing for the ruleset"
+fi
+
 if ip rule list | grep -q "lookup $RT_TABLE"; then ok "fwmark policy rule present"
 else bad "no fwmark rule — TPROXY packets will not be delivered locally"; fi
 

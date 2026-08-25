@@ -99,6 +99,41 @@ resolved without DNS, which is the thing you're trying to fix.
   goes through the tunnel, but AdGuard won't see or filter it.
 - The client's gateway isn't actually the box. Check its routing table.
 
+## The firewall loads, then disappears
+
+`gw apply` reports `firewall loaded`, and moments later `gw status` says
+`firewall not loaded` — while `gw-network` still shows `active`.
+
+That combination is the tell. `gw-network` is `Type=oneshot` with
+`RemainAfterExit=yes`, so it reports active once its rules are in place and
+keeps reporting active even if something else removes them afterwards.
+
+Almost always this is Debian's own `nftables.service`, which loads
+`/etc/nftables.conf` — a file that begins with `flush ruleset` and therefore
+erases every table, including this one. Two units cannot both own the ruleset.
+
+```bash
+systemctl is-enabled nftables.service    # expect: masked
+sudo gw apply                            # masks it, with a warning
+```
+
+`gw check` fails if it is ever re-enabled.
+
+To watch it happen, or to rule this out and look elsewhere:
+
+```bash
+sudo systemctl restart gw-network
+for i in $(seq 1 15); do
+  nft list table inet gateway >/dev/null 2>&1 && s=loaded || s=GONE
+  echo "$((i*2))s $s"; sleep 2
+done
+journalctl -n 60 --no-pager -o short-iso | grep -iE 'nft|gw-network'
+```
+
+If it survives 30 seconds there but vanishes later, something on a timer is
+doing it — `nft list ruleset | grep '^table'` will show whose tables are
+present.
+
 ## Nothing came back after a reboot
 
 ```bash
