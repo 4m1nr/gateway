@@ -30,7 +30,8 @@ installed_version() {
 }
 
 latest_version() {
-  gw_curl -o /dev/null -w '%{url_effective}' "$REPO_URL/releases/latest" 2>/dev/null \
+  gw_curl --max-time 30 -o /dev/null -w '%{url_effective}' \
+    "$REPO_URL/releases/latest" 2>/dev/null \
     | sed 's|.*/tag/||'
 }
 

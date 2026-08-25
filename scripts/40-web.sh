@@ -34,7 +34,11 @@ install -d -m 0755 /etc/gateway
 
 if [ "$TLS" = yes ] && [ ! -f /etc/gateway/web.key ]; then
   info "generating a self-signed certificate for $BOX"
-  command -v openssl >/dev/null || apt-get install -y --no-install-recommends openssl
+  if ! command -v openssl >/dev/null; then
+    apt_proxy_on
+    apt-get install -y --no-install-recommends openssl
+    apt_proxy_off
+  fi
   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
     -keyout /etc/gateway/web.key -out /etc/gateway/web.crt \
     -subj "/CN=gateway.local" \

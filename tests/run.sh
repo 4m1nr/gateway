@@ -316,6 +316,48 @@ for f in tests/invalid/*.toml; do
 done
 
 echo
+echo "== setup network calls honour the bootstrap proxy =="
+# Setup runs before the tunnel carries traffic, so anything fetching from an
+# external host must go through gw_curl (which applies bootstrap.socks_proxy)
+# and must have a timeout. A bare curl here hangs for five minutes and then
+# fails on exactly the networks this box exists to work around.
+offenders=""
+for f in scripts/*.sh templates/lib/*.sh; do
+  while IFS= read -r line; do
+    case "$line" in
+      *gw_curl*|*socks5-hostname*|*"runuser -u xray"*|*ca-certificates*) continue ;;
+      # The IPv6 probe is deliberately direct: it is testing whether v6 egress
+      # exists at all, so routing it through anything would defeat the point.
+      *"curl -6"*) continue ;;
+      "#"*|*"# "*) continue ;;
+    esac
+    case "$line" in
+      *"curl "*http*) offenders="$offenders $(basename "$f")" ;;
+    esac
+  done < "$f"
+done
+if [ -z "$offenders" ]; then
+  ok "no bare curl to an external host in the setup scripts"
+else
+  bad "bare curl (bypasses the bootstrap proxy) in:$offenders"
+fi
+
+# Only actual invocations: a line that starts with gw_curl, not the function
+# definition or a comment mentioning it.
+missing_timeout=""
+for f in scripts/*.sh templates/lib/*.sh; do
+  [ "$(basename "$f")" = "net.sh" ] && continue   # the definition itself
+  if grep -E '^[[:space:]]*gw_curl ' "$f" 2>/dev/null | grep -qv -- "--max-time"; then
+    missing_timeout="$missing_timeout $(basename "$f")"
+  fi
+done
+if [ -z "$missing_timeout" ]; then
+  ok "every gw_curl call sets --max-time"
+else
+  bad "gw_curl without --max-time in:$missing_timeout"
+fi
+
+echo
 echo "== entry points resolve through symlinks =="
 # The documented install symlinks /usr/local/bin/gw -> /opt/gateway/bin/gw.
 # $BASH_SOURCE and $0 report the symlink, not its target, so an unresolved

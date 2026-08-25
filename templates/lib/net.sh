@@ -18,6 +18,11 @@ gw_proxy() {
 
 gw_curl() {
   proxy=$(gw_proxy)
+  # Timeouts first so a caller's own --max-time overrides them (curl takes the
+  # last occurrence). Without a cap an unreachable host hangs setup for minutes
+  # with no output — which is the normal failure mode on the networks this box
+  # exists to work around, not an edge case.
+  set -- --connect-timeout 15 --max-time 120 "$@"
   if [ -n "$proxy" ]; then
     curl -fsSL --proxy "$proxy" "$@"
   else

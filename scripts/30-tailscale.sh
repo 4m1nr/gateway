@@ -16,12 +16,28 @@ need_root
 
 if ! command -v tailscale >/dev/null; then
   info "installing Tailscale"
-  curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg \
-    -o /usr/share/keyrings/tailscale-archive-keyring.gpg
-  curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list \
-    -o /etc/apt/sources.list.d/tailscale.list
+  # gw_curl and apt_proxy_on, not bare curl/apt: pkgs.tailscale.com is exactly
+  # the kind of host that is unreachable from the network this box is meant to
+  # fix, and at this point the tunnel may not be carrying traffic yet.
+  # --max-time so an unreachable host fails in a minute instead of hanging.
+  CODENAME=$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-trixie}")
+  gw_curl --max-time 60 \
+    "https://pkgs.tailscale.com/stable/debian/${CODENAME}.noarmor.gpg" \
+    -o /usr/share/keyrings/tailscale-archive-keyring.gpg \
+    || die "could not fetch the Tailscale signing key.
+  If this box cannot reach pkgs.tailscale.com directly, either bring the tunnel
+  up first (gw status) or set bootstrap.socks_proxy in gateway.toml, or re-run:
+    sudo GW_PROXY=socks5h://host:port scripts/30-tailscale.sh"
+
+  gw_curl --max-time 60 \
+    "https://pkgs.tailscale.com/stable/debian/${CODENAME}.tailscale-keyring.list" \
+    -o /etc/apt/sources.list.d/tailscale.list \
+    || die "could not fetch the Tailscale apt source list"
+
+  apt_proxy_on
   apt-get update -qq
   apt-get install -y tailscale
+  apt_proxy_off
 fi
 
 systemctl enable --now tailscaled
