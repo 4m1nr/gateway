@@ -413,9 +413,48 @@ def act_verify_password(req: dict) -> dict:
     }
 
 
+def escape_service_sandbox() -> None:
+    """Leave gw-web's mount namespace before touching the filesystem.
+
+    gw-web.service runs with ProtectSystem=strict, and a sudo'd child inherits
+    that mount namespace — so this helper is root and still sees a read-only
+    /opt and /etc:
+
+        OSError: [Errno 30] Read-only file system: '/opt/gateway/gateway.toml'
+
+    That sandbox exists to stop the *web process* writing anything directly;
+    it was never meant to constrain the privileged helper, which is the whole
+    sanctioned path for making changes. Re-enter PID 1's namespace once, then
+    carry on. Running from a shell, the namespaces already match and this is a
+    no-op.
+    """
+    if os.environ.get("GW_NS_REEXEC"):
+        return
+    try:
+        if os.readlink("/proc/self/ns/mnt") == os.readlink("/proc/1/ns/mnt"):
+            return
+    except OSError:
+        return  # cannot tell; carry on and let the real error speak
+
+    nsenter = shutil.which("nsenter")
+    if not nsenter:
+        fail("running inside a service sandbox and nsenter is not available — "
+             "install util-linux, or run this from a shell")
+
+    os.environ["GW_NS_REEXEC"] = "1"
+    # execv keeps stdin, so the JSON request on it survives the re-exec.
+    os.chdir("/")
+    try:
+        os.execv(nsenter, [nsenter, "--mount=/proc/1/ns/mnt", "--",
+                           sys.executable, os.path.abspath(__file__)])
+    except OSError as e:
+        fail(f"could not leave the service sandbox: {e}")
+
+
 def main() -> None:
     if os.geteuid() != 0:
         fail("web-action.py must run as root (via the sudoers entry)")
+    escape_service_sandbox()
     raw = sys.stdin.read(65536)
     try:
         req = json.loads(raw or "{}")

@@ -255,6 +255,22 @@ again.
 **Browser certificate warning.** Expected — the certificate is self-signed by
 `scripts/40-web.sh`. Accept it once, or reach the dashboard over Tailscale.
 
+**"Read-only file system" from the dashboard.**
+
+```
+OSError: [Errno 30] Read-only file system: '/opt/gateway/gateway.toml'
+```
+
+`gw-web.service` runs with `ProtectSystem=strict`, and a process started with
+sudo from inside a service **inherits that service's mount namespace** — so the
+privileged helper is genuinely root and still sees a read-only `/opt` and
+`/etc`. Being root is not enough; the filesystem view is the restriction.
+
+The helper re-enters PID 1's mount namespace before touching anything, which
+keeps the sandbox on the network-facing process where it belongs. If this
+returns, check that `nsenter` exists (`util-linux`) and that the helper still
+contains `escape_service_sandbox`.
+
 **Apply fails from the dashboard but `gw apply` works in a shell.** The
 dashboard runs `gw apply` as root through the helper, so the difference is
 almost always a validation error surfaced in the returned output. Check

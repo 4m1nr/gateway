@@ -278,6 +278,20 @@ print('yes' if gwconfig.load('$f').web_enabled else 'no')")
         && ok "$name: sudoers parses" || bad "$name: sudoers does NOT parse"
     fi
 
+    # The web process must stay sandboxed, and the privileged helper must
+    # leave that sandbox — a sudo'd child inherits the service's mount
+    # namespace, so without this the helper is root on a read-only filesystem
+    # and every dashboard write fails with EROFS.
+    if grep -q '^ProtectSystem=strict' "$units/gw-web.service"; then
+      ok "$name: gw-web keeps its filesystem sandbox"
+    else bad "$name: gw-web no longer sets ProtectSystem=strict"; fi
+
+    helper="$OUT/$name/usr/local/lib/gateway/web-action.py"
+    if grep -q 'def escape_service_sandbox' "$helper" \
+       && grep -q 'escape_service_sandbox()' "$helper"; then
+      ok "$name: the privileged helper escapes the service sandbox"
+    else bad "$name: web-action.py does not leave gw-web's mount namespace"; fi
+
     # sudo needs setuid, so this one hardening knob has to stay off; asserting
     # it stops a future "tighten the unit" change from silently breaking auth.
     if grep -q '^NoNewPrivileges=false' "$units/gw-web.service"; then
