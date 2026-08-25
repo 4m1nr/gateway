@@ -1,0 +1,32 @@
+{
+  "protocol": "vless",
+  "settings": {
+    "vnext": [
+      {
+        "address": "example.com",
+        "port": 443,
+        "users": [
+          {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "encryption": "none"
+          }
+        ]
+      }
+    ]
+  },
+  "streamSettings": {
+    "network": "xhttp",
+    "security": "tls",
+    "tlsSettings": {
+      "serverName": "example.com",
+      "fingerprint": "chrome",
+      "alpn": ["h2", "http/1.1"],
+      "allowInsecure": false
+    },
+    "xhttpSettings": {
+      "host": "example.com",
+      "path": "/xhttp",
+      "mode": "auto"
+    }
+  }
+}

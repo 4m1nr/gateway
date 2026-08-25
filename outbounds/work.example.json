@@ -1,0 +1,31 @@
+{
+  "protocol": "vless",
+  "settings": {
+    "vnext": [
+      {
+        "address": "vpn.work.example",
+        "port": 443,
+        "users": [
+          {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "encryption": "none"
+          }
+        ]
+      }
+    ]
+  },
+  "streamSettings": {
+    "network": "xhttp",
+    "security": "tls",
+    "tlsSettings": {
+      "serverName": "vpn.work.example",
+      "fingerprint": "chrome",
+      "alpn": ["h2", "http/1.1"]
+    },
+    "xhttpSettings": {
+      "host": "vpn.work.example",
+      "path": "/work",
+      "mode": "auto"
+    }
+  }
+}

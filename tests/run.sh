@@ -231,6 +231,23 @@ for f in tests/invalid/*.toml; do
 done
 
 echo
+echo "== committed templates =="
+# The README and .gitignore both point at these; losing them breaks a new
+# install's starting point, and gitignore means git will not warn you.
+for tpl in outbounds/main.example.json outbounds/work.example.json; do
+  if [ ! -f "$tpl" ]; then bad "$tpl is missing"
+  elif ! python3 -c "import json,sys;json.load(open(sys.argv[1]))" "$tpl" 2>/dev/null; then
+    bad "$tpl is not valid JSON"
+  elif ! git ls-files --error-unmatch "$tpl" >/dev/null 2>&1; then
+    bad "$tpl exists but is not tracked by git (check .gitignore negation)"
+  else ok "$(basename "$tpl") present, valid and tracked"; fi
+done
+if ls outbounds/*.json >/dev/null 2>&1 && \
+   ls outbounds/*.json | grep -qv '\.example\.json$'; then
+  bad "outbounds/ contains non-example .json files — real credentials do not belong in the repo working tree of a test run"
+else ok "no stray credential files in outbounds/"; fi
+
+echo
 echo "== shell syntax =="
 for f in bin/gw scripts/*.sh templates/lib/*.sh lib/common.sh; do
   if bash -n "$f" 2>/dev/null || sh -n "$f" 2>/dev/null; then ok "$(basename "$f")"
