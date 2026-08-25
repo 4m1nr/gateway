@@ -64,7 +64,21 @@ table inet gateway {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
 
+        # THE BOX'S OWN TRAFFIC ARRIVES HERE.
+        #
+        # The output chain marks it, and `ip route local default dev lo` in
+        # table 100 loops it back in through lo — which is the only way it can
+        # reach a tproxy rule at all, because tproxy is valid in prerouting and
+        # nowhere else. Catch it before the loopback shortcut below, or the
+        # packet is routed to a local address nothing is listening on and
+        # silently disappears: the box gets no internet while LAN clients work
+        # fine and the SOCKS health probe still reports the tunnel up.
+        iif lo meta mark $MARK_TPROXY meta l4proto { tcp, udp } \
+            tproxy ip to 127.0.0.1:$TPROXY_PORT accept
+
+        # Anything else on loopback is genuinely local.
         iif lo return
+
         # LAN, tailnet, reserved space: local business, stays local
         ip daddr @bypass_dst return
 {{IPV6_PREROUTING}}

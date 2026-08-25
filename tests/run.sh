@@ -71,9 +71,23 @@ for f in tests/fixtures/*.toml; do
     ok "$name: killswitch rule present"
   else bad "$name: KILLSWITCH RULE MISSING"; fi
 
+  # The box's own traffic is marked in output, looped back through lo by policy
+  # routing, and can only be intercepted in prerouting. If the loopback
+  # shortcut comes first, those packets vanish and the box has no internet
+  # while LAN clients work and the SOCKS health probe still says "tunnel up" —
+  # which is a genuinely awful thing to debug.
+  nftf="$OUT/$name/etc/nftables.d/gateway.nft"
+  pre=$(sed -n '/chain prerouting/,/^    }/p' "$nftf")
+  lo_tproxy=$(printf '%s' "$pre" | grep -n 'iif lo meta mark' | head -1 | cut -d: -f1)
+  lo_return=$(printf '%s' "$pre" | grep -n '^ *iif lo return' | head -1 | cut -d: -f1)
+  if [ -n "$lo_tproxy" ] && [ -n "$lo_return" ] && [ "$lo_tproxy" -lt "$lo_return" ]; then
+    ok "$name: looped-back local traffic is intercepted before the lo shortcut"
+  else
+    bad "$name: prerouting returns on lo before intercepting marked local traffic — the box will have no internet"
+  fi
+
   # The loop guards are equally load-bearing: without them the box wedges the
   # moment interception is enabled.
-  nftf="$OUT/$name/etc/nftables.d/gateway.nft"
   if grep -q 'meta mark \$MARK_XRAY return' "$nftf" && grep -q 'meta skuid "xray" return' "$nftf"; then
     ok "$name: both output-chain loop guards present"
   else bad "$name: loop guard missing from the output chain"; fi
