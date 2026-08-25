@@ -267,9 +267,20 @@ print('yes' if gwconfig.load('$f').web_enabled else 'no')")
 
     # The sudo grant is the dashboard's whole privilege surface. A wildcard
     # here would let a compromised web process run arbitrary gw subcommands.
-    if grep -qE '^gwweb .*NOPASSWD: */usr/local/lib/gateway/web-action\.py *$' "$sudoers"; then
-      ok "$name: sudoers grants exactly one command, no arguments"
-    else bad "$name: sudoers grant is not the single web-action.py entry"; fi
+    # Two spellings of the same single command: via systemd-run (which is how
+    # the helper gets outside gw-web's sandbox) and bare (the fallback). Both
+    # must be written out in full, so the grant stays exact-match.
+    bare=$(grep -cE '^gwweb .*NOPASSWD: */usr/local/lib/gateway/web-action\.py *$' "$sudoers")
+    viarun=$(grep -cE '^gwweb .*NOPASSWD: */usr/bin/systemd-run --pipe --wait --collect --quiet /usr/local/lib/gateway/web-action\.py *$' "$sudoers")
+    if [ "$bare" -eq 1 ] && [ "$viarun" -eq 1 ]; then
+      ok "$name: sudoers grants exactly the two fixed helper invocations"
+    else bad "$name: sudoers grants are not the expected exact commands (bare=$bare systemd-run=$viarun)"; fi
+
+    # Every grant line must name a full command; a bare interpreter or a
+    # directory would be a much broader grant than it looks.
+    if grep -E '^gwweb' "$sudoers" | grep -qvE 'NOPASSWD: .*/web-action\.py *$'; then
+      bad "$name: a sudoers grant does not end in web-action.py"
+    else ok "$name: every sudo grant ends at the helper itself"; fi
     if grep -qE 'NOPASSWD:.*[*]' "$sudoers"; then
       bad "$name: SUDOERS CONTAINS A WILDCARD"
     else ok "$name: no wildcard in the sudo grant"; fi
@@ -285,6 +296,13 @@ print('yes' if gwconfig.load('$f').web_enabled else 'no')")
     if grep -q '^ProtectSystem=strict' "$units/gw-web.service"; then
       ok "$name: gw-web keeps its filesystem sandbox"
     else bad "$name: gw-web no longer sets ProtectSystem=strict"; fi
+
+    # The dashboard must reach the helper through systemd-run, or it inherits
+    # this service's read-only mount namespace and its no-namespaces seccomp
+    # filter — the two together make every write fail as root.
+    if grep -q 'systemd-run' lib/webapp.py; then
+      ok "$name: the dashboard invokes the helper outside its own sandbox"
+    else bad "$name: webapp.py calls the helper with plain sudo — it will inherit the sandbox"; fi
 
     helper="$OUT/$name/usr/local/lib/gateway/web-action.py"
     if grep -q 'def escape_service_sandbox' "$helper" \

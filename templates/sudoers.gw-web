@@ -9,4 +9,10 @@
 # already implement and check.
 Defaults:gwweb !requiretty
 Defaults:gwweb !syslog
+# Two forms of the same single command, both spelled out in full so this stays
+# an exact-command grant. The systemd-run form is what the dashboard normally
+# uses: it asks PID 1 to run the helper as a fresh transient unit, outside
+# gw-web's mount namespace and seccomp filter, which the web process itself
+# must keep. The bare form is the fallback where systemd-run is unavailable.
+gwweb ALL=(root) NOPASSWD: /usr/bin/systemd-run --pipe --wait --collect --quiet /usr/local/lib/gateway/web-action.py
 gwweb ALL=(root) NOPASSWD: /usr/local/lib/gateway/web-action.py

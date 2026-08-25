@@ -161,24 +161,48 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------ privileged --
     def privileged(self, request: dict) -> tuple[bool, dict]:
         """Hand a request to the root helper. Nothing here builds a shell
-        command; the payload travels over stdin as JSON."""
-        try:
-            proc = subprocess.run(
-                ["sudo", "-n", ACTION],
-                input=json.dumps(request),
-                capture_output=True,
-                text=True,
-                timeout=310,
-            )
-        except subprocess.TimeoutExpired:
-            return False, {"error": "the action timed out"}
-        if proc.stdout.strip():
+        command; the payload travels over stdin as JSON.
+
+        systemd-run first, so PID 1 spawns the helper as a fresh transient
+        unit. A plain `sudo` child stays inside THIS service's sandbox — it
+        inherits the mount namespace (ProtectSystem=strict, so /opt and /etc
+        are read-only even for root) and the seccomp filter
+        (RestrictNamespaces=true, so it cannot escape by itself either). Both
+        restrictions are worth keeping on a network-facing process; the helper
+        simply should not be subject to them.
+
+        Both forms are named in full in the sudoers file, so this stays an
+        exact-command grant with no wildcards.
+        """
+        attempts = [
+            ["sudo", "-n", "/usr/bin/systemd-run",
+             "--pipe", "--wait", "--collect", "--quiet", ACTION],
+            ["sudo", "-n", ACTION],
+        ]
+        last = "privileged helper failed"
+        for argv in attempts:
             try:
-                data = json.loads(proc.stdout)
-                return bool(data.get("ok")), data
-            except ValueError:
-                pass
-        return False, {"error": (proc.stderr.strip() or "privileged helper failed")[:500]}
+                proc = subprocess.run(
+                    argv,
+                    input=json.dumps(request),
+                    capture_output=True,
+                    text=True,
+                    timeout=310,
+                )
+            except subprocess.TimeoutExpired:
+                return False, {"error": "the action timed out"}
+            except OSError as e:
+                last = str(e)
+                continue
+            if proc.stdout.strip():
+                try:
+                    data = json.loads(proc.stdout)
+                    return bool(data.get("ok")), data
+                except ValueError:
+                    pass
+            last = proc.stderr.strip() or f"{argv[2]} exited {proc.returncode} with no output"
+            log.warning("privileged call via %s failed: %s", argv[2], last[:300])
+        return False, {"error": last[:500]}
 
     # ----------------------------------------------------------------- verbs --
     def do_GET(self):
@@ -276,7 +300,13 @@ class Handler(BaseHTTPRequestHandler):
         # never readable by this process.
         ok, result = self.privileged({"action": "verify_password", "password": password})
         if not ok:
-            return self.send_json({"error": "could not check the password"}, 500)
+            # Include the reason: "could not check the password" on its own
+            # sends you looking at the password, not at the helper.
+            reason = str(result.get("error", "")).splitlines()[:1]
+            detail = f": {reason[0]}" if reason else ""
+            return self.send_json(
+                {"error": f"could not reach the privileged helper{detail}"}, 500
+            )
         if not result.get("password_set"):
             return self.send_json(
                 {"error": "no dashboard password is set — run `sudo gw web-passwd` on the box"},

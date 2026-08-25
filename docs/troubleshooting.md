@@ -255,6 +255,24 @@ again.
 **Browser certificate warning.** Expected — the certificate is self-signed by
 `scripts/40-web.sh`. Accept it once, or reach the dashboard over Tailscale.
 
+**"could not reach the privileged helper".**
+
+The dashboard cannot run its helper at all. `journalctl -u gw-web -n 30` now
+logs the underlying reason for each attempt. Check the sudo grant directly:
+
+```bash
+sudo -u gwweb sudo -n /usr/bin/systemd-run --pipe --wait --collect --quiet \
+  /usr/local/lib/gateway/web-action.py <<< '{"action":"auth_status"}'
+sudo visudo -cf /etc/sudoers.d/gw-web
+```
+
+`gw-web.service` is deliberately sandboxed twice over — `ProtectSystem=strict`
+makes the filesystem read-only, and `RestrictNamespaces=true` stops the process
+escaping that by itself. Both apply to anything it starts with sudo, including
+the helper. That is why the helper is launched through `systemd-run`: PID 1
+runs it as a fresh transient unit, outside both restrictions, while the
+network-facing process keeps them.
+
 **"Read-only file system" from the dashboard.**
 
 ```
