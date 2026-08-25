@@ -10,6 +10,7 @@
 #   gw restart       restart the whole stack
 #   gw status        what is running and whether the tunnel is up
 #   gw check         end-to-end verification, including leak tests
+#   gw diag [ip]     why a client's traffic is or is not being intercepted
 #   gw client        add/remove/list per-client policy
 #   gw job           add/remove/list scheduled jobs
 #   gw web-passwd    set the dashboard password
@@ -386,6 +387,84 @@ cmd_status() {
 # ----------------------------------------------------------------- check ----
 cmd_check() { need_root check; "$REPO/scripts/90-verify.sh" "$@"; }
 
+# ------------------------------------------------------------------ diag ----
+# Answers "where does this client's traffic actually go?" from the counters,
+# rather than from reasoning about the ruleset. Every decision point in
+# prerouting is counted, so one of these numbers moving identifies the rule
+# that claimed the packets.
+cmd_diag() {
+  need_root diag
+  local client="${1:-}"
+
+  printf '%s== ruleset ==%s\n' "$c_grn" "$c_off"
+  if ! nft list table inet gateway >/dev/null 2>&1; then
+    die "the gateway table is not loaded — run 'sudo gw apply'"
+  fi
+  nft list chain inet gateway prerouting \
+    | grep -E 'counter packets' \
+    | sed -E 's/^\s+//; s/(.*)counter packets ([0-9]+) bytes ([0-9]+)(.*)comment "([^"]+)"/  \5: \2 packets, \3 bytes/' \
+    | sed -E 's/^  ([a-z-]+): 0 packets.*/  \1: -/'
+  printf '\n%s== forward (traffic that was NOT intercepted) ==%s\n' "$c_grn" "$c_off"
+  nft list chain inet gateway forward \
+    | grep -E 'counter packets' \
+    | sed -E 's/^\s+//; s/(.*)counter packets ([0-9]+) bytes ([0-9]+)(.*)comment "([^"]+)"/  \5: \2 packets/' \
+    | sed -E 's/(.*)counter packets ([0-9]+).*/  (uncommented rule): \2 packets/'
+
+  printf '\n%s== policy routing ==%s\n' "$c_grn" "$c_off"
+  ip rule list | sed 's/^/  /'
+  printf '  table %s: %s\n' "$(gw_env RT_TABLE)" \
+    "$(ip route show table "$(gw_env RT_TABLE)" 2>/dev/null | tr '\n' ' ')"
+
+  printf '\n%s== interception sets ==%s\n' "$c_grn" "$c_off"
+  for s in proxy_clients direct_clients blocked_clients; do
+    printf '  %-16s %s\n' "$s" \
+      "$(nft list set inet gateway "$s" 2>/dev/null \
+         | sed -n 's/.*elements = { \(.*\) }.*/\1/p')"
+  done
+  printf '  %-16s %s\n' "default" "$(gw_env DEFAULT_POLICY)"
+  printf '  %-16s %s\n' "lan_cidr" "$(gw_env LAN_CIDR)"
+
+  printf '\n%s== forwarding ==%s\n' "$c_grn" "$c_off"
+  printf '  ip_forward=%s rp_filter=%s send_redirects=%s\n' \
+    "$(cat /proc/sys/net/ipv4/ip_forward)" \
+    "$(cat /proc/sys/net/ipv4/conf/all/rp_filter)" \
+    "$(cat /proc/sys/net/ipv4/conf/all/send_redirects)"
+  printf '  xray listening: %s\n' \
+    "$(ss -lntup 2>/dev/null | grep -c "$(gw_env TPROXY_PORT)") socket(s) on $(gw_env TPROXY_PORT)"
+
+  if [ -n "$client" ]; then
+    printf '\n%s== client %s ==%s\n' "$c_grn" "$client" "$c_off"
+    printf '  in proxy_clients : %s\n' \
+      "$(nft get element inet gateway proxy_clients "{ $client }" >/dev/null 2>&1 \
+         && echo yes || echo 'no (covered by the LAN default if it is inside lan_cidr)')"
+    printf '  in direct_clients: %s\n' \
+      "$(nft get element inet gateway direct_clients "{ $client }" >/dev/null 2>&1 \
+         && echo yes || echo no)"
+    printf '  conntrack        : %s entries\n' \
+      "$(conntrack -L 2>/dev/null | grep -c "src=$client" || echo '? (install conntrack)')"
+    printf '  recent in xray   :\n'
+    journalctl -u xray -n 200 --no-pager -o cat 2>/dev/null \
+      | grep "$client" | tail -5 | sed 's/^/    /' \
+      || printf '    (none — its packets are not reaching Xray)\n'
+  fi
+
+  cat <<'HINT'
+
+Reading this:
+  lan-intercepted / listed-intercepted climbing  the client IS being proxied;
+                                                 look at Xray, not the firewall
+  poisoned-dns climbing                          the client is following a
+                                                 poisoned DNS answer — point its
+                                                 DNS at this box
+  killswitch climbing                            traffic reached forward instead
+                                                 of being intercepted
+  bypass-local climbing                          the destination is being treated
+                                                 as local
+  all flat                                       the packets never arrive: check
+                                                 the client's default gateway
+HINT
+}
+
 # ---------------------------------------------------------------- client ----
 cmd_client() { $PY "$REPO/lib/clients.py" "$CONFIG" "$@"; }
 cmd_job()    { $PY "$REPO/lib/jobs.py"    "$CONFIG" "$@"; }
@@ -550,6 +629,7 @@ case "${1:-}" in
   restart) shift; cmd_restart "$@" ;;
   status) shift; cmd_status "$@" ;;
   check)  shift; cmd_check "$@" ;;
+  diag)   shift; cmd_diag "$@" ;;
   client) shift; cmd_client "$@" ;;
   job)    shift; cmd_job "$@" ;;
   web-passwd) shift; cmd_web_passwd "$@" ;;

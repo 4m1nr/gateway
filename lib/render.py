@@ -74,9 +74,10 @@ def render_nft(cfg: Config) -> str:
     # traffic by destination requires Xray to see it.
     if cfg.default_policy in cfg.intercepted:
         pre_default = (
-            "        meta l4proto { tcp, udp } ip saddr $LAN \\\n"
-            "            meta mark set $MARK_TPROXY "
-            "tproxy ip to 127.0.0.1:$TPROXY_PORT accept\n"
+            "        meta l4proto { tcp, udp } ip saddr $LAN {{DNS_EXCLUDE}}\\\n"
+            "            meta mark set $MARK_TPROXY counter \\\n"
+            "            tproxy ip to 127.0.0.1:$TPROXY_PORT accept "
+            'comment "lan-intercepted"\n'
         )
         # Same kill switch as for listed clients: if Xray is not listening the
         # TPROXY rule above does not match, and this drop is what stops the
@@ -134,6 +135,8 @@ def render_nft(cfg: Config) -> str:
             f"        # web dashboard, restricted to web.allow_cidrs\n"
             f"        ip saddr {{ {allowed} }} tcp dport {cfg.web_port} accept\n"
         )
+
+    pre_default = pre_default.replace("{{DNS_EXCLUDE}}", dns_exclude)
 
     return subst(
         tpl,

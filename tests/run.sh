@@ -155,7 +155,9 @@ import sys;sys.path.insert(0,'lib');import gwconfig
 print(gwconfig.load('$f').default_policy)")
   case "$pol" in
     proxy)
-      if grep -q 'ip saddr \$LAN \\' "$nftf" && grep -q 'killswitch-default' "$nftf"; then
+      # Anchored on the rule comment: the rule text carries counters and
+      # exclusions that change, the comment names what the rule is for.
+      if grep -q 'lan-intercepted' "$nftf" && grep -q 'killswitch-default' "$nftf"; then
         ok "$name: LAN catch-all intercepts, with a kill switch"
       else bad "$name: default is proxy but the LAN catch-all does not intercept"; fi
       grep -q 'ip saddr \$LAN masquerade' "$nftf" \
@@ -172,7 +174,7 @@ print(gwconfig.load('$f').default_policy)")
   esac
 
   # The box and the router live inside $LAN and must never be swept up by it.
-  if grep -q 'ip saddr { \$BOX, \$ROUTER } return' "$nftf"; then
+  if grep -q 'self-or-router' "$nftf"; then
     ok "$name: box and router excluded from the catch-all"
   else bad "$name: box/router not excluded — the catch-all can capture them"; fi
 

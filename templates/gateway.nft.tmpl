@@ -80,7 +80,8 @@ table inet gateway {
         # silently disappears: the box gets no internet while LAN clients work
         # fine and the SOCKS health probe still reports the tunnel up.
         iif lo meta mark $MARK_TPROXY meta l4proto { tcp, udp } \
-            tproxy ip to 127.0.0.1:$TPROXY_PORT accept
+            counter tproxy ip to 127.0.0.1:$TPROXY_PORT accept \
+            comment "local-intercepted"
 
         # Anything else on loopback is genuinely local.
         iif lo return
@@ -93,27 +94,30 @@ table inet gateway {
         # only match an address that is genuinely unreachable from here.
 {{POISONED_RULE}}
         # LAN, tailnet, reserved space: local business, stays local
-        ip daddr @bypass_dst return
+        ip daddr @bypass_dst counter return comment "bypass-local"
 {{IPV6_PREROUTING}}
-        ip saddr @blocked_clients drop
+        ip saddr @blocked_clients counter drop comment "blocked-client"
 
         # explicit opt-out wins over everything below
-        ip saddr @direct_clients return
+        ip saddr @direct_clients counter return comment "direct-client"
 
         # the interception itself (includes 100.64.0.0/10 when tailnet egress
         # is proxied, which is what puts exit-node traffic in the tunnel)
         meta l4proto { tcp, udp } ip saddr @proxy_clients {{DNS_EXCLUDE}}\
-            meta mark set $MARK_TPROXY tproxy ip to 127.0.0.1:$TPROXY_PORT accept
+            meta mark set $MARK_TPROXY counter \
+            tproxy ip to 127.0.0.1:$TPROXY_PORT accept comment "listed-intercepted"
 
         # Neither of these ever forwards traffic through us, but they are inside
         # $LAN and so would otherwise be caught by the catch-all below.
-        ip saddr { $BOX, $ROUTER } return
+        ip saddr { $BOX, $ROUTER } counter return comment "self-or-router"
 
         # Catch-all for the rest of the LAN. Only traffic that is actually
         # being forwarded reaches this chain, so this matches exactly the
         # devices that pointed their default gateway at this box — a device
         # that never opted in never sends us a packet to match.
-{{PREROUTING_DEFAULT}}    }
+{{PREROUTING_DEFAULT}}
+        counter comment "prerouting-unmatched"
+    }
 
     # -------------------------------------------------------------- output --
     # This is what puts the BOX'S OWN traffic through the tunnel.
@@ -126,7 +130,7 @@ table inet gateway {
         meta mark $MARK_XRAY return
         meta skuid "xray" return
 
-        ip daddr @bypass_dst return
+        ip daddr @bypass_dst counter return comment "bypass-local"
 {{IPV6_OUTPUT}}
         # NTP goes direct, always. TLS and REALITY both fail on a wrong clock,
         # so a tunnelled time sync is an unrecoverable boot dependency.
@@ -190,7 +194,7 @@ table inet gateway {
         ct state established,related accept
         ct state invalid drop
 
-        ip saddr @blocked_clients drop
+        ip saddr @blocked_clients counter drop comment "blocked-client"
 
         # opted-out clients: plain NAT out to the router
         ip saddr @direct_clients accept
