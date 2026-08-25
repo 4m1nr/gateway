@@ -1,6 +1,15 @@
 # Shared helpers for the install scripts. Source, don't execute.
 set -euo pipefail
 
+# nft, sysctl, ip, visudo and useradd all live in /usr/sbin, which is NOT in
+# every root PATH — a plain `su`, or a root shell whose profile never added it,
+# has only /usr/bin. Calling them by bare name then fails in ways that look
+# like something else entirely: `gw status` reported "firewall not loaded"
+# purely because it could not find nft, while `sudo gw apply` worked because
+# sudo's secure_path does include /usr/sbin.
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
+export PATH
+
 # Same symlink resolution as bin/gw: a script invoked through a symlink would
 # otherwise compute the wrong repo root.
 gw_resolve_repo() {

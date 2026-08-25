@@ -18,6 +18,15 @@
 #   gw logs          follow the relevant journals
 set -euo pipefail
 
+# nft, sysctl, ip, visudo and useradd all live in /usr/sbin, which is NOT in
+# every root PATH — a plain `su`, or a root shell whose profile never added it,
+# has only /usr/bin. Calling them by bare name then fails in ways that look
+# like something else entirely: `gw status` reported "firewall not loaded"
+# purely because it could not find nft, while `sudo gw apply` worked because
+# sudo's secure_path does include /usr/sbin.
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin${PATH:+:$PATH}"
+export PATH
+
 # Resolve the repo root through symlinks. The documented install symlinks
 # /usr/local/bin/gw -> /opt/gateway/bin/gw, and $BASH_SOURCE is the symlink
 # path, not its target — so without this the root resolves to /usr/local and
@@ -35,6 +44,15 @@ gw_resolve_repo() {
   (cd "$(dirname "$self")/.." && pwd)
 }
 REPO="${GW_REPO:-$(gw_resolve_repo "${BASH_SOURCE[0]}")}"
+
+for _need in nft ip; do
+  command -v "$_need" >/dev/null 2>&1 || {
+    printf '\033[31m[x]\033[0m required command %s not found on PATH.\n' "$_need" >&2
+    printf '    PATH=%s\n' "$PATH" >&2
+    exit 1
+  }
+done
+unset _need
 
 if [ ! -f "$REPO/lib/render.py" ]; then
   printf '\033[31m[x]\033[0m could not locate the gateway repo (looked in %s).\n' "$REPO" >&2
@@ -320,7 +338,9 @@ cmd_status() {
     fi
   done
 
-  if nft list table inet gateway >/dev/null 2>&1; then
+  if ! command -v nft >/dev/null 2>&1; then
+    printf 'firewall    %sunknown%s — nft is not on PATH, cannot tell\n' "$c_yel" "$c_off"
+  elif nft list table inet gateway >/dev/null 2>&1; then
     printf 'firewall    loaded\n'
     local proxied drops
     proxied=$(nft list set inet gateway proxy_clients 2>/dev/null \

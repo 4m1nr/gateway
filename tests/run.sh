@@ -365,6 +365,43 @@ else
 fi
 
 echo
+echo "== sbin tools are reachable regardless of the caller's PATH =="
+# nft, sysctl and ip live in /usr/sbin, which is absent from some root PATHs.
+# Calling them by bare name made `gw status` report "firewall not loaded"
+# purely because it could not find nft, while `sudo gw apply` worked (sudo's
+# secure_path includes /usr/sbin). The disagreement looked like the firewall
+# was vanishing.
+for f in bin/gw lib/common.sh templates/lib/net.sh; do
+  if grep -q 'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' "$f"; then
+    ok "$(basename "$f") sets an explicit PATH"
+  else
+    bad "$(basename "$f") does not set PATH — sbin tools may be unreachable"
+  fi
+done
+
+# The assignment has to come before anything uses those tools.
+first_path=$(grep -n '^PATH=' bin/gw | head -1 | cut -d: -f1)
+first_use=$(grep -nE '^[^#]*\b(nft|sysctl|ip) ' bin/gw | head -1 | cut -d: -f1)
+if [ -n "$first_path" ] && [ -n "$first_use" ] && [ "$first_path" -lt "$first_use" ]; then
+  ok "gw sets PATH before its first sbin tool call"
+else
+  bad "gw uses an sbin tool at line ${first_use:-?} before setting PATH at line ${first_path:-none}"
+fi
+
+# And a missing tool must say so rather than being read as "no firewall".
+if grep -q 'required command %s not found on PATH' bin/gw; then
+  ok "gw fails loudly when a required tool is missing"
+else
+  bad "gw does not check that nft/ip are present"
+fi
+
+if env -i PATH=/usr/bin:/bin HOME=/tmp bash bin/gw help >/dev/null 2>&1; then
+  ok "gw runs with a stripped environment"
+else
+  bad "gw fails with a minimal PATH"
+fi
+
+echo
 echo "== entry points resolve through symlinks =="
 # The documented install symlinks /usr/local/bin/gw -> /opt/gateway/bin/gw.
 # $BASH_SOURCE and $0 report the symlink, not its target, so an unresolved

@@ -99,18 +99,28 @@ resolved without DNS, which is the thing you're trying to fix.
   goes through the tunnel, but AdGuard won't see or filter it.
 - The client's gateway isn't actually the box. Check its routing table.
 
-## The firewall loads, then disappears
+## The firewall "disappears" between commands
 
-`gw apply` reports `firewall loaded`, and moments later `gw status` says
-`firewall not loaded` — while `gw-network` still shows `active`.
+`sudo gw apply` reports `firewall loaded`, then plain `gw status` says
+`firewall not loaded` — with `gw-network` active throughout.
 
-That combination is the tell. `gw-network` is `Type=oneshot` with
-`RemainAfterExit=yes`, so it reports active once its rules are in place and
-keeps reporting active even if something else removes them afterwards.
+**Check PATH first.** `nft` lives in `/usr/sbin`, which is missing from some
+root PATHs. `sudo` supplies its own `secure_path` (which includes `/usr/sbin`),
+so anything run under sudo finds `nft` and anything run directly does not — and
+the check then reads a missing binary as a missing firewall.
 
-Almost always this is Debian's own `nftables.service`, which loads
-`/etc/nftables.conf` — a file that begins with `flush ruleset` and therefore
-erases every table, including this one. Two units cannot both own the ruleset.
+```bash
+command -v nft || echo 'nft not on PATH — that is the bug, not the firewall'
+```
+
+`gw` now sets an explicit PATH and refuses to start if `nft` or `ip` is
+missing, so this should not recur. `command not found` from any gw command is
+the same root cause.
+
+If `nft` is on PATH and the table really is being removed, the other cause is
+Debian's own `nftables.service`: it loads `/etc/nftables.conf`, which begins
+with `flush ruleset` and erases every table including this one. Two units
+cannot both own the ruleset.
 
 ```bash
 systemctl is-enabled nftables.service    # expect: masked
@@ -119,7 +129,16 @@ sudo gw apply                            # masks it, with a warning
 
 `gw check` fails if it is ever re-enabled.
 
-To watch it happen, or to rule this out and look elsewhere:
+To watch the ruleset itself change, which settles it either way:
+
+```bash
+sudo nft monitor > /tmp/nftmon.log 2>&1 &
+sudo gw apply
+sleep 20; sudo kill %1
+grep -E '^(add|delete|flush) table' /tmp/nftmon.log
+```
+
+Or poll it:
 
 ```bash
 sudo systemctl restart gw-network
