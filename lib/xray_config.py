@@ -272,16 +272,15 @@ def build(cfg: Config) -> dict:
                     "connIdle": cfg.conn_idle,
                     "uplinkOnly": 0,
                     "downlinkOnly": 0,
-                    # Per-connection buffer. The default is tuned for a server
-                    # with memory to spare; on a thin client a large buffer
-                    # costs RAM and cache locality without buying throughput.
-                    "bufferSize": cfg.buffer_size_kb,
                 }
             },
             "system": {"statsOutboundUplink": True, "statsOutboundDownlink": True},
         },
         "stats": {},
     }
+    if cfg.buffer_size_kb >= 0:
+        conf["policy"]["levels"]["0"]["bufferSize"] = cfg.buffer_size_kb
+
     if cfg.fallback:
         conf["burstObservatory"] = {
             "subjectSelector": ["proxy", "fallback"],

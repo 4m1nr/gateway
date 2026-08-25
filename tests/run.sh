@@ -92,7 +92,10 @@ for f in tests/fixtures/*.toml; do
 import json,sys;sys.path.insert(0,'lib');import gwconfig
 c = gwconfig.load('$f'); d = json.load(open('$OUT/$name/usr/local/etc/xray/config.json'))
 lvl = d['policy']['levels']['0']
-assert lvl['bufferSize'] == c.buffer_size_kb, 'bufferSize not applied'
+if c.buffer_size_kb >= 0:
+    assert lvl['bufferSize'] == c.buffer_size_kb, 'bufferSize not applied'
+else:
+    assert 'bufferSize' not in lvl, 'bufferSize set when it should be left alone'
 assert lvl['connIdle'] == c.conn_idle, 'connIdle not applied'
 if c.tcp_congestion:
     for o in d['outbounds']:
@@ -577,6 +580,37 @@ if env -i PATH=/usr/bin:/bin HOME=/tmp bash bin/gw help >/dev/null 2>&1; then
   ok "gw runs with a stripped environment"
 else
   bad "gw fails with a minimal PATH"
+fi
+
+echo
+echo "== awk programs actually parse =="
+# `printf "%.1f", x>0 ? a : b` is a SYNTAX ERROR in awk: the > is parsed as
+# output redirection. It fails silently inside a shell pipeline and produces
+# empty output, which is exactly how gw bench reported two blank measurements.
+awk_bad=0
+while IFS= read -r prog; do
+  printf '%s' "$prog" | awk -f /dev/stdin </dev/null >/dev/null 2>&1 || awk_bad=$((awk_bad + 1))
+done <<'PROGS'
+BEGIN { d = 1; printf "%.1f
+", (d > 0 ? 400 / d : 0) }
+PROGS
+if [ "$awk_bad" -eq 0 ]; then
+  ok "sample awk program parses"
+else bad "an awk program failed to parse"; fi
+
+# The real guard: no unparenthesised comparison in a print/printf argument.
+if grep -nE '(printf|print)[^;]*,[^;]*[a-z0-9_]+ *> *[0-9]' bin/gw | grep -v '(' >/dev/null 2>&1; then
+  bad "bin/gw has a print/printf with an unparenthesised > (awk parses it as redirection)"
+else
+  ok "no unparenthesised > inside a print argument"
+fi
+
+# curl writes its -w output even on failure, so an `|| echo` fallback appends
+# a second value and corrupts the parse.
+if grep -q "size_download}' \"\$url\" 2>/dev/null || echo" bin/gw; then
+  bad "gw bench appends a fallback to curl -w output, which corrupts the parse"
+else
+  ok "gw bench parses curl -w output without a corrupting fallback"
 fi
 
 echo

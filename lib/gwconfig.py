@@ -162,10 +162,13 @@ class Config:
         self.outbound_mark = int(xr.get("outbound_mark", 255))
         # ---- performance (parsed before outbounds, which consume it) ----------------------------------------------------
         perf = raw.get("performance", {})
-        # Xray's per-connection buffer, in KB. The default suits a server with
-        # memory to spare; a thin client benefits from a smaller one, and 0
-        # means "no limit" rather than "none".
-        self.buffer_size_kb = int(perf.get("buffer_size_kb", 64))
+        # Xray's per-connection buffer, in KB. Left unset by default: shrinking
+        # it caps throughput on a high-latency path (the window has to hold a
+        # bandwidth-delay product, and a censored route is usually long), and
+        # picking a number without measuring the specific link is how you make
+        # things slower while believing you tuned them. -1 means "leave Xray's
+        # own default alone".
+        self.buffer_size_kb = int(perf.get("buffer_size_kb", -1))
         # Applied to outbound sockets. BBR helps most on a lossy path, which is
         # what a censored route usually is.
         self.tcp_congestion = str(perf.get("tcp_congestion", "bbr"))

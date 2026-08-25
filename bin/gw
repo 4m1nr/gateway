@@ -619,22 +619,47 @@ cmd_bench() {
   printf '\n%s== throughput ==%s\n' "$c_grn" "$c_off"
   printf '  downloading 50 MB twice; this takes a moment...\n'
 
-  local t0 t1 direct tunnel
-  t0=$(date +%s.%N)
-  gw_as_user xray curl -o /dev/null -s --max-time 120 "$url" 2>/dev/null || true
-  t1=$(date +%s.%N)
-  direct=$(awk -v a="$t0" -v b="$t1" 'BEGIN{d=b-a; printf "%.1f", d>0 ? 400/d : 0}')
+  # curl reports its own throughput, which is more honest than timing the
+  # wrapper: it excludes DNS and connection setup and counts the bytes that
+  # actually arrived. %{speed_download} is bytes/s.
+  local direct tunnel dbytes tbytes cpu0 cpu1
+  cpu0=$(awk '/^cpu /{print $2+$3+$4+$6+$7+$8, $5}' /proc/stat)
 
-  t0=$(date +%s.%N)
-  curl -o /dev/null -s --max-time 120 --socks5-hostname "127.0.0.1:$socks" "$url" 2>/dev/null || true
-  t1=$(date +%s.%N)
-  tunnel=$(awk -v a="$t0" -v b="$t1" 'BEGIN{d=b-a; printf "%.1f", d>0 ? 400/d : 0}')
+  # curl writes its -w output even when the transfer fails, so a `|| echo`
+  # fallback would append a second pair and corrupt the parse. Take whatever
+  # curl printed and validate it instead.
+  local out
+  out=$(gw_as_user xray curl -o /dev/null -s --max-time 120 \
+          -w '%{speed_download} %{size_download}' "$url" 2>/dev/null) || true
+  direct=$(printf '%s' "$out" | awk '{print $1+0}')
+  dbytes=$(printf '%s' "$out" | awk '{print $2+0}')
 
-  printf '  direct (bypassing the tunnel): %s Mb/s\n' "$direct"
-  printf '  through the tunnel           : %s Mb/s\n' "$tunnel"
+  out=$(curl -o /dev/null -s --max-time 120 --socks5-hostname "127.0.0.1:$socks" \
+          -w '%{speed_download} %{size_download}' "$url" 2>/dev/null) || true
+  tunnel=$(printf '%s' "$out" | awk '{print $1+0}')
+  tbytes=$(printf '%s' "$out" | awk '{print $2+0}')
+
+  cpu1=$(awk '/^cpu /{print $2+$3+$4+$6+$7+$8, $5}' /proc/stat)
+
+  # bytes/s -> Mb/s
+  direct=$(awk -v v="$direct" 'BEGIN{ printf "%.1f", (v * 8) / 1000000 }')
+  tunnel=$(awk -v v="$tunnel" 'BEGIN{ printf "%.1f", (v * 8) / 1000000 }')
+
+  printf '  direct (bypassing the tunnel): %s Mb/s  (%s bytes)\n' "$direct" "$dbytes"
+  printf '  through the tunnel           : %s Mb/s  (%s bytes)\n' "$tunnel" "$tbytes"
+  printf '  cpu busy during the test     : %s\n' \
+    "$(awk -v p="$cpu0" -v q="$cpu1" 'BEGIN{
+         split(p, a, " "); split(q, b, " ")
+         busy = b[1] - a[1]; idle = b[2] - a[2]; tot = busy + idle
+         if (tot <= 0) { print "?"; exit }
+         printf "%.0f%% of %d cores", busy * 100 / tot, 1
+       }' )"
 
   awk -v d="$direct" -v t="$tunnel" -v s="$speed" 'BEGIN {
-    if (d <= 0 || t <= 0) { print "  (a measurement failed - check connectivity)"; exit }
+    if (d + 0 <= 0 || t + 0 <= 0) {
+      print "  (a measurement failed - check connectivity, and see the byte counts above)"
+      exit
+    }
     r = t / d * 100
     printf "  tunnel is %.0f%% of direct\n", r
     if (r < 60) {

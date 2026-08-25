@@ -383,10 +383,13 @@ lockout_minutes   = 15
 #  therefore caps clients near 50 Mb/s. A second NIC removes that ceiling.
 # ============================================================================
 [performance]
-# Xray's per-connection buffer, in KB. The upstream default suits a server
-# with memory to spare; on a thin client a large buffer costs RAM without
-# buying throughput. 0 means unlimited, not zero.
-buffer_size_kb = 64
+# Xray's per-connection buffer, in KB. Left alone by default, and that is
+# deliberate: shrinking it caps throughput on a high-latency path, because the
+# buffer has to hold a bandwidth-delay product and a censored route is usually
+# a long one. 40 Mb/s at 200 ms needs about 1 MB in flight — a 64 KB buffer
+# would cost you most of the line. Only set this if `gw bench` shows the
+# tunnel is the bottleneck AND you have measured the difference.
+# buffer_size_kb = 512
 
 # Congestion control for outbound sockets. BBR helps most on a lossy path,
 # which a censored route usually is. Needs the bbr module (00-bootstrap
