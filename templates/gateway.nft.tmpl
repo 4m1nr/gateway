@@ -14,6 +14,7 @@
 define WAN         = "{{WAN_IF}}"
 define LAN         = {{LAN_CIDR}}
 define BOX         = {{BOX_IP}}
+define ROUTER      = {{ROUTER}}
 define TAILNET     = 100.64.0.0/10
 define TPROXY_PORT = {{TPROXY_PORT}}
 define MARK_TPROXY = {{MARK_TPROXY}}
@@ -76,7 +77,16 @@ table inet gateway {
         # is proxied, which is what puts exit-node traffic in the tunnel)
         meta l4proto { tcp, udp } ip saddr @proxy_clients \
             meta mark set $MARK_TPROXY tproxy ip to 127.0.0.1:$TPROXY_PORT accept
-    }
+
+        # Neither of these ever forwards traffic through us, but they are inside
+        # $LAN and so would otherwise be caught by the catch-all below.
+        ip saddr { $BOX, $ROUTER } return
+
+        # Catch-all for the rest of the LAN. Only traffic that is actually
+        # being forwarded reaches this chain, so this matches exactly the
+        # devices that pointed their default gateway at this box — a device
+        # that never opted in never sends us a packet to match.
+{{PREROUTING_DEFAULT}}    }
 
     # -------------------------------------------------------------- output --
     # This is what puts the BOX'S OWN traffic through the tunnel.
@@ -166,7 +176,7 @@ table inet gateway {
         # was NOT intercepted, which means Xray is down. Drop it — never let it
         # fall back to a direct connection.
         ip saddr @proxy_clients counter drop comment "killswitch"
-
+{{FORWARD_DEFAULT}}
         counter comment "dropped-forward"
     }
 
@@ -178,5 +188,6 @@ table inet gateway {
         # delivered locally to Xray and leave with the box's own address.
         oifname $WAN ip saddr @direct_clients masquerade
         oifname $WAN ip saddr $TAILNET masquerade
+{{POSTROUTING_DEFAULT}}
     }
 }

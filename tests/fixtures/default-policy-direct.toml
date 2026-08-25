@@ -23,7 +23,7 @@ prefix_len = 24
 #          default route, which comes from the router's RAs).
 # "pass" — leave v6 alone entirely (leaks around the tunnel; do not use unless
 #          you know why you want it).
-mode = "pass"
+mode = "off"
 
 # ============================================================================
 #  Xray
@@ -135,11 +135,20 @@ statslog_days = 7
 #
 # Must live in this table. A bare `default_policy = ...` written after another
 # [table] belongs to that table and is ignored — the loader rejects that now.
-default = "proxy"
+default = "direct"
 
 # Examples of overriding the default. Under default = "proxy" you do NOT need
 # an entry to proxy a device — just point its gateway here.
 
+[[client]]
+ip     = "192.168.1.60"
+name   = "tv"
+policy = "direct"
+
+[[client]]
+ip     = "192.168.1.99"
+name   = "iot-plug"
+policy = "block"
 
 # ============================================================================
 #  Tailscale
@@ -155,7 +164,7 @@ proxy_tailnet_egress = true
 # Route tailscaled's own control-plane + DERP traffic through Xray. Needed if
 # Tailscale is blocked upstream. Cost: when Xray dies, so does your remote
 # admin path — hence the lifeline below.
-route_control_via_xray = false
+route_control_via_xray = true
 # After this many minutes of sustained tunnel failure, let tailscaled talk
 # direct so you can still SSH in and fix things. 0 disables the lifeline.
 lifeline_after_min = 10

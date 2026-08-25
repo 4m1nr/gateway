@@ -63,6 +63,32 @@ def render_nft(cfg: Config) -> str:
     # gw-tailscale-exception.service instead of being baked in here.
     exceptions = ""
 
+    # The catch-all that makes "point your gateway here and you are proxied"
+    # true. It matches $LAN in the forward path only, so it applies to exactly
+    # the devices that opted in — a device using the router as its gateway
+    # never sends a packet through this chain.
+    if cfg.default_policy == "proxy":
+        pre_default = (
+            "        meta l4proto { tcp, udp } ip saddr $LAN \\\n"
+            "            meta mark set $MARK_TPROXY "
+            "tproxy ip to 127.0.0.1:$TPROXY_PORT accept\n"
+        )
+        # Same kill switch as for listed clients: if Xray is not listening the
+        # TPROXY rule above does not match, and this drop is what stops the
+        # packet finding a direct way out.
+        fwd_default = (
+            '        ip saddr $LAN counter drop comment "killswitch-default"\n'
+        )
+        post_default = ""
+    elif cfg.default_policy == "direct":
+        pre_default = "        ip saddr $LAN return\n"
+        fwd_default = "        ip saddr $LAN accept\n"
+        post_default = "        oifname $WAN ip saddr $LAN masquerade\n"
+    else:  # block
+        pre_default = "        ip saddr $LAN drop\n"
+        fwd_default = ""
+        post_default = ""
+
     ssh_rule = "        ip saddr $LAN tcp dport 22 accept\n" if cfg.ssh_allow_lan else ""
     ui_rule = f"        ip saddr $LAN tcp dport {cfg.ui_port} accept\n"
 
@@ -74,6 +100,7 @@ def render_nft(cfg: Config) -> str:
             "WAN_IF": cfg.wan_if,
             "LAN_CIDR": cfg.lan_cidr,
             "BOX_IP": cfg.box_ip,
+            "ROUTER": cfg.router,
             "TPROXY_PORT": str(cfg.tproxy_port),
             "MARK_TPROXY": "1",
             "MARK_XRAY": str(cfg.outbound_mark),
@@ -86,6 +113,9 @@ def render_nft(cfg: Config) -> str:
             "IPV6_PREROUTING": v6_pre,
             "IPV6_OUTPUT": v6_out,
             "IPV6_FORWARD": v6_fwd,
+            "PREROUTING_DEFAULT": pre_default,
+            "FORWARD_DEFAULT": fwd_default,
+            "POSTROUTING_DEFAULT": post_default,
             "INPUT_SSH": ssh_rule,
             "INPUT_UI": ui_rule,
         },
@@ -118,6 +148,7 @@ def render_network(cfg: Config) -> str:
         {
             "WAN_IF": cfg.wan_if,
             "BOX_IP": cfg.box_ip,
+            "ROUTER": cfg.router,
             "PREFIX_LEN": str(cfg.prefix_len),
             "ROUTER": cfg.router,
             "IPV6_NETWORK": v6,
@@ -149,6 +180,7 @@ def render_env(cfg: Config) -> str:
             f"LIFELINE_MIN={cfg.ts_lifeline_min if cfg.ts_enabled else 0}",
             f"UI_PORT={cfg.ui_port}",
             f"DNS_PORT={cfg.dns_port}",
+            f"DEFAULT_POLICY={cfg.default_policy}",
             "",
         ]
     )

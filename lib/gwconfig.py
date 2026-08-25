@@ -129,9 +129,25 @@ class Config:
                     )
 
         # ---- clients --------------------------------------------------------
-        self.default_policy = raw.get("default_policy", "proxy")
+        # A bare `default_policy = ...` written after any [table] is parsed as a
+        # key of THAT table, so it silently does nothing. That is exactly what
+        # happened in the first version of the example config, and the bug was
+        # invisible because the ignored value matched the fallback. Reject it
+        # loudly rather than quietly using the wrong policy.
+        for name, table in raw.items():
+            if name != "policy" and isinstance(table, dict) and "default_policy" in table:
+                raise ConfigError(
+                    f"default_policy is inside [{name}], where TOML makes it "
+                    f"{name}.default_policy and nothing reads it. Move it to:\n"
+                    '\n  [policy]\n  default = "proxy"\n'
+                )
+        self.default_policy = raw.get("policy", {}).get(
+            "default", raw.get("default_policy", "proxy")
+        )
         if self.default_policy not in POLICIES:
-            raise ConfigError(f"default_policy must be one of {POLICIES}")
+            raise ConfigError(
+                f"policy.default must be one of {POLICIES}, not {self.default_policy!r}"
+            )
 
         self.clients = []
         seen = set()

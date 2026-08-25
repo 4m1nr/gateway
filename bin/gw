@@ -229,7 +229,11 @@ cmd_status() {
               | sed -n 's/.*elements = { \(.*\) }.*/\1/p')
     drops=$(nft list chain inet gateway forward 2>/dev/null \
             | grep killswitch | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+')
-    printf '%s  proxied sources : %s%s\n' "$c_dim" "${proxied:-none}" "$c_off"
+    local defpol
+    defpol=$(sed -n 's/^DEFAULT_POLICY=//p' /usr/local/lib/gateway/env 2>/dev/null)
+    printf '%s  default         : %s (any device whose gateway is this box)%s\n' \
+      "$c_dim" "${defpol:-?}" "$c_off"
+    printf '%s  listed proxied  : %s%s\n' "$c_dim" "${proxied:-none}" "$c_off"
     printf '%s  killswitch drops: %s%s\n' "$c_dim" "${drops:-0}" "$c_off"
   else
     printf 'firewall    %snot loaded%s\n' "$c_red" "$c_off"

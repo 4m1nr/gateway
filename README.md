@@ -44,19 +44,32 @@ the LAN offline.
 
 ## Opting a device in
 
-Set its default gateway to the box's IP and its DNS to the same address, then
-tell the gateway about it:
+**Set its default gateway to the box's IP.** That's the whole procedure — the
+device is now proxied, split-routed and covered by the kill switch. Point its
+DNS at the same address to get filtering too.
+
+Nothing needs to be registered anywhere. The firewall's catch-all covers the
+whole LAN, and only traffic that is actually being forwarded reaches it, so it
+matches exactly the devices that pointed at the box. A device that never opts in
+never sends a packet through it and is completely unaffected.
+
+You only list a device to **override** that default:
 
 ```bash
-gw client add 192.168.1.50 laptop proxy    # through the tunnel
-gw client add 192.168.1.60 tv     direct   # forwarded untouched
-gw client add 192.168.1.99 iot    block    # dropped
+gw client add 192.168.1.60 tv   direct   # forwarded untouched, real IP
+gw client add 192.168.1.99 iot  block    # dropped at the gateway
 sudo gw apply
 ```
 
-Give opted-in devices a static IP or a DHCP reservation on the router — the
-policy is keyed to the address. Devices you never touch keep using the router
-and are completely unaffected. See `docs/per-client-policy.md`.
+Listed devices need a static IP or a DHCP reservation on the router, since the
+override is keyed to the address. Change the default itself in `gateway.toml`:
+
+```toml
+[policy]
+default = "proxy"   # or "direct" / "block"
+```
+
+See `docs/per-client-policy.md`.
 
 ## Commands
 
@@ -129,10 +142,11 @@ Two layers decide what happens to a packet:
 
 | Layer | Decides |
 |---|---|
-| nftables sets | *whether* a client is intercepted |
+| nftables | *whether* a client is intercepted — listed overrides first, then a LAN-wide catch-all |
 | Xray routing | *where* an intercepted flow goes (proxy / direct / block) |
 
-**Interception.** `prerouting` matches traffic from `@proxy_clients` and hands
+**Interception.** `prerouting` checks the explicit override sets first, then
+falls through to a catch-all on the LAN CIDR. It matches traffic and hands
 it to Xray's `dokodemo-door` listener with TPROXY. A `divert` chain re-marks
 packets belonging to established transparent sockets, and a policy-routing rule
 (`fwmark 1` → a table whose only route is `local default dev lo`) makes the

@@ -117,24 +117,37 @@ statslog_days = 7
 #           "direct"  forwarded straight out to the router, never touched
 #           "block"   dropped at the gateway
 #
-#  These are the devices that have opted in by pointing their default gateway
-#  at this box. A device not listed here and not using this box as its gateway
-#  is simply unaffected. A device that DOES use this box as its gateway but is
-#  not listed gets `default_policy` below.
+#  Listing a device here is how you OVERRIDE the default. Any device that
+#  points its default gateway at this box gets [policy].default without being
+#  listed at all — listing is only needed to opt something out.
 #
-#  Give opted-in devices a static IP (or a router DHCP reservation) — the
-#  policy is keyed to the address.
+#  A device that never points its gateway here is simply unaffected: it never
+#  sends us a packet to match.
+#
+#  Give listed devices a static IP (or a router DHCP reservation) — policy is
+#  keyed to the address.
 # ============================================================================
-default_policy = "proxy"
 
-[[client]]
-ip     = "192.168.1.50"
-name   = "laptop"
-policy = "proxy"
+[policy]
+# Applies to every device that uses this box as its gateway and is not listed
+# below. "proxy" means opting in is the only step: set the gateway, and the
+# traffic is tunnelled and covered by the kill switch.
+#
+# Must live in this table. A bare `default_policy = ...` written after another
+# [table] belongs to that table and is ignored — the loader rejects that now.
+default = "proxy"
+
+# Examples of overriding the default. Under default = "proxy" you do NOT need
+# an entry to proxy a device — just point its gateway here.
 
 [[client]]
 ip     = "192.168.1.60"
 name   = "tv"
+policy = "direct"
+
+[[client]]
+ip     = "192.168.1.99"
+name   = "iot-plug"
 policy = "block"
 
 # ============================================================================

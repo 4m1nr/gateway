@@ -78,6 +78,28 @@ if command -v chronyc >/dev/null && chronyc tracking >/dev/null 2>&1; then
   else bad "clock is off by ${OFF}s — TLS will fail"; fi
 else skip "chrony not available"; fi
 
+# ------------------------------------------------------------- catch-all --
+sec "default policy"
+# The whole point of the catch-all: a device only has to set its gateway.
+case "${DEFAULT_POLICY:-proxy}" in
+  proxy)
+    if nft list chain inet gateway prerouting | grep -q "tproxy ip to 127.0.0.1:$TPROXY_PORT"; then
+      ok "unlisted devices pointing here are intercepted by default"
+    else bad "no catch-all TPROXY rule — an unlisted device would just be dropped"; fi
+    if nft list chain inet gateway forward | grep -q "killswitch-default"; then
+      ok "catch-all kill switch present"
+    else bad "no catch-all kill switch — unlisted devices could leak if Xray dies"; fi ;;
+  direct)  ok "default is direct — unlisted devices are forwarded unproxied" ;;
+  block)   ok "default is block — unlisted devices are dropped" ;;
+esac
+if nft list chain inet gateway prerouting | grep -q "$BOX_IP.*$ROUTER\|{ $BOX_IP, $ROUTER }"; then
+  ok "the box and the router are excluded from the catch-all"
+else
+  # nft may render the addresses via the defines rather than literally.
+  nft -t list chain inet gateway prerouting >/dev/null 2>&1 \
+    && skip "could not confirm the box/router exclusion from the live ruleset"
+fi
+
 # ------------------------------------------------------------------ egress --
 sec "egress"
 # Anything running as the xray user bypasses the tunnel (the OUTPUT chain

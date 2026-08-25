@@ -79,6 +79,35 @@ for f in tests/fixtures/*.toml; do
   if [ -z "$missing" ]; then ok "$name: stack units are PartOf gateway.target"
   else bad "$name: PartOf=gateway.target missing from:$missing"; fi
 
+  # The catch-all is what makes "set your gateway to the box and you are
+  # proxied" true, so it has to match the configured default exactly.
+  nftf="$OUT/$name/etc/nftables.d/gateway.nft"
+  pol=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print(gwconfig.load('$f').default_policy)")
+  case "$pol" in
+    proxy)
+      if grep -q 'ip saddr \$LAN \\' "$nftf" && grep -q 'killswitch-default' "$nftf"; then
+        ok "$name: LAN catch-all intercepts, with a kill switch"
+      else bad "$name: default is proxy but the LAN catch-all does not intercept"; fi
+      grep -q 'ip saddr \$LAN masquerade' "$nftf" \
+        && bad "$name: proxied default must never masquerade the LAN (that is a leak path)" \
+        || ok "$name: no LAN masquerade under a proxied default" ;;
+    direct)
+      if grep -q 'ip saddr \$LAN return' "$nftf" && grep -q 'ip saddr \$LAN masquerade' "$nftf"; then
+        ok "$name: LAN catch-all forwards direct, with NAT"
+      else bad "$name: default is direct but the catch-all does not forward+NAT"; fi ;;
+    block)
+      grep -q 'ip saddr \$LAN drop' "$nftf" \
+        && ok "$name: LAN catch-all drops" \
+        || bad "$name: default is block but the catch-all does not drop" ;;
+  esac
+
+  # The box and the router live inside $LAN and must never be swept up by it.
+  if grep -q 'ip saddr { \$BOX, \$ROUTER } return' "$nftf"; then
+    ok "$name: box and router excluded from the catch-all"
+  else bad "$name: box/router not excluded — the catch-all can capture them"; fi
+
   # tailscaled must NOT be PartOf: restarting the stack would drop the session
   # you are almost certainly using to manage the box.
   if grep -q '^PartOf=gateway.target' "$units/AdGuardHome.service.d/gw.conf" 2>/dev/null \
