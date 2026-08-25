@@ -3,7 +3,15 @@
 #
 # Run this from the console, or at least be ready to reconnect: it takes over
 # network configuration, which will briefly drop an SSH session.
-source "$(dirname "$0")/../lib/common.sh"
+# Resolve $0 through symlinks before locating the shared helpers — a
+# symlinked script would otherwise look for lib/common.sh next to the
+# symlink instead of next to the real file.
+_self="$0"
+while [ -L "$_self" ]; do
+  _link="$(readlink "$_self")"
+  case "$_link" in /*) _self="$_link" ;; *) _self="$(dirname "$_self")/$_link" ;; esac
+done
+source "$(dirname "$_self")/../lib/common.sh"
 need_root
 
 info "installing packages"

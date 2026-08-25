@@ -291,6 +291,38 @@ for f in tests/invalid/*.toml; do
 done
 
 echo
+echo "== entry points resolve through symlinks =="
+# The documented install symlinks /usr/local/bin/gw -> /opt/gateway/bin/gw.
+# $BASH_SOURCE and $0 report the symlink, not its target, so an unresolved
+# dirname computes /usr/local as the repo root and every lookup lands in the
+# wrong tree. This is exactly how it broke in the field.
+LINKDIR=$(mktemp -d)
+ln -sf "$PWD/bin/gw" "$LINKDIR/gw"
+if out=$("$LINKDIR/gw" help 2>&1) && printf '%s' "$out" | grep -q "gw init"; then
+  ok "bin/gw works through an absolute symlink"
+else
+  bad "bin/gw through a symlink: ${out%%$'\n'*}"
+fi
+
+ln -sf gw "$LINKDIR/gw-chained"
+if "$LINKDIR/gw-chained" help >/dev/null 2>&1; then
+  ok "bin/gw follows a relative symlink chain"
+else bad "bin/gw does not follow a relative symlink chain"; fi
+
+# The scripts source lib/common.sh relative to themselves, which fails before
+# common.sh can fix anything — so it has to be resolved by the caller.
+ln -sf "$PWD/scripts/90-verify.sh" "$LINKDIR/verify"
+out=$("$LINKDIR/verify" 2>&1 || true)
+if printf '%s' "$out" | grep -q "common.sh: No such file"; then
+  bad "a symlinked script cannot find lib/common.sh"
+else ok "install scripts find lib/common.sh through a symlink"; fi
+
+if out=$(GW_REPO="$PWD" "$LINKDIR/gw" help 2>&1) && printf '%s' "$out" | grep -q "gw init"; then
+  ok "GW_REPO overrides repo detection"
+else bad "GW_REPO override does not work"; fi
+rm -rf "$LINKDIR"
+
+echo
 echo "== fixtures are generated, not hand-maintained =="
 # A fixture that no longer matches the example silently stops exercising what
 # it was written for: a .replace() that misses leaves the default in place and

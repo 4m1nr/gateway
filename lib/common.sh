@@ -1,7 +1,21 @@
 # Shared helpers for the install scripts. Source, don't execute.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[1]}")/.." && pwd)"
+# Same symlink resolution as bin/gw: a script invoked through a symlink would
+# otherwise compute the wrong repo root.
+gw_resolve_repo() {
+  local self="$1" target
+  while [ -L "$self" ]; do
+    target="$(readlink "$self")"
+    case "$target" in
+      /*) self="$target" ;;
+      *)  self="$(dirname "$self")/$target" ;;
+    esac
+  done
+  (cd "$(dirname "$self")/.." && pwd)
+}
+
+REPO="${GW_REPO:-$(gw_resolve_repo "${BASH_SOURCE[1]}")}"
 
 c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_off=$'\033[0m'
 info() { printf '%s==>%s %s\n' "$c_grn" "$c_off" "$*"; }

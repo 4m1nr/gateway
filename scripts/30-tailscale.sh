@@ -3,7 +3,15 @@
 #
 # Exit-node traffic is proxied because 100.64.0.0/10 is in @proxy_clients, so a
 # remote device using this box as its exit node comes out of the Xray server.
-source "$(dirname "$0")/../lib/common.sh"
+# Resolve $0 through symlinks before locating the shared helpers — a
+# symlinked script would otherwise look for lib/common.sh next to the
+# symlink instead of next to the real file.
+_self="$0"
+while [ -L "$_self" ]; do
+  _link="$(readlink "$_self")"
+  case "$_link" in /*) _self="$_link" ;; *) _self="$(dirname "$_self")/$_link" ;; esac
+done
+source "$(dirname "$_self")/../lib/common.sh"
 need_root
 
 if ! command -v tailscale >/dev/null; then

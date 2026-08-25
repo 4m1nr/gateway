@@ -18,7 +18,29 @@
 #   gw logs          follow the relevant journals
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve the repo root through symlinks. The documented install symlinks
+# /usr/local/bin/gw -> /opt/gateway/bin/gw, and $BASH_SOURCE is the symlink
+# path, not its target — so without this the root resolves to /usr/local and
+# every "$REPO/lib/..." lookup lands in the wrong tree.
+# GW_REPO overrides it for anything unusual.
+gw_resolve_repo() {
+  local self="$1" target
+  while [ -L "$self" ]; do
+    target="$(readlink "$self")"
+    case "$target" in
+      /*) self="$target" ;;
+      *)  self="$(dirname "$self")/$target" ;;
+    esac
+  done
+  (cd "$(dirname "$self")/.." && pwd)
+}
+REPO="${GW_REPO:-$(gw_resolve_repo "${BASH_SOURCE[0]}")}"
+
+if [ ! -f "$REPO/lib/render.py" ]; then
+  printf '\033[31m[x]\033[0m could not locate the gateway repo (looked in %s).\n' "$REPO" >&2
+  printf '    Set GW_REPO=/path/to/gateway, or run bin/gw from the checkout.\n' >&2
+  exit 1
+fi
 CONFIG="${GW_CONFIG:-$REPO/gateway.toml}"
 BUILD="$REPO/build"
 export PYTHONPATH="$REPO/lib"
@@ -419,7 +441,7 @@ NFT
 # ------------------------------------------------------------------ logs ----
 cmd_logs() { journalctl -fu xray -u gw-network -u gw-health -u AdGuardHome -t gw-health "$@"; }
 
-usage() { awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "${BASH_SOURCE[0]}"; }
+usage() { awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$REPO/bin/gw"; }
 
 # --proxy applies to every download this run makes; it overrides
 # bootstrap.socks_proxy from the config.
