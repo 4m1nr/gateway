@@ -46,6 +46,33 @@ nft list chain inet gateway output | grep -E 'MARK_XRAY|skuid'
 and every Xray outbound must carry `"mark": 255` in `streamSettings.sockopt`.
 `tests/run.sh` asserts both.
 
+## The box has no internet but LAN clients do
+
+And `gw status` says the tunnel is up. The giveaway is in the Xray log:
+
+```bash
+journalctl -u xray -n 40 --no-pager -o cat | grep accepted
+```
+
+If every line says `[socks-in -> proxy]` and none says `tproxy-in`, the box's
+own traffic is not reaching Xray at all. The health probe uses the SOCKS
+inbound directly, so it goes on reporting the tunnel up while nothing else
+works — the one check meant to catch this cannot see it.
+
+Local traffic takes a longer path than forwarded traffic: the output chain
+marks it, `ip route local default dev lo` in table 100 loops it back in through
+`lo`, and it is intercepted in **prerouting**, the only hook where `tproxy` is
+valid. A prerouting chain that returns early on `iif lo` skips exactly those
+packets, which are then routed to a local address nothing is listening on and
+silently disappear.
+
+```bash
+nft list chain inet gateway prerouting | head
+```
+
+The `iif lo meta mark 0x1 ... tproxy` rule must come **before** `iif lo return`.
+`tests/run.sh` asserts that ordering.
+
 ## A proxied client has no internet
 
 That is the kill switch, and it means Xray isn't listening:
