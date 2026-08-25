@@ -169,6 +169,14 @@ cmd_apply() {
   info "enabling the gateway stack for boot"
   enable_stack
 
+  # `gw panic` leaves a blanket-masquerade table behind. Applying a real
+  # config must remove it, or the box keeps a stale NAT path that nothing
+  # in the generated ruleset knows about.
+  if nft list table ip gwpanic >/dev/null 2>&1; then
+    info "clearing the panic-mode NAT table"
+    nft delete table ip gwpanic 2>/dev/null || true
+  fi
+
   info "reloading policy routing and firewall"
   # restart, not `enable --now`: the unit is usually already running and would
   # otherwise keep serving the previous ruleset.
