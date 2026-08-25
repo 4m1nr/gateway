@@ -66,7 +66,10 @@ and are completely unaffected. See `docs/per-client-policy.md`.
 | `gw render` | generate `build/` (safe, changes nothing) |
 | `gw diff` | show exactly what `apply` would change |
 | `gw apply` | render, diff, install, validate, reload |
-| `gw status` | services, tunnel state, killswitch drop count |
+| `gw enable` | enable the whole stack to start on boot |
+| `gw disable` | stop the stack and remove it from boot |
+| `gw restart` | restart the whole stack |
+| `gw status` | services, boot state, tunnel state, killswitch drop count |
 | `gw check` | end-to-end verification incl. leak tests |
 | `gw check --killswitch` | also prove traffic dies rather than leaking |
 | `gw client` | `list` / `add <ip> <name> <policy>` / `rm <ip>` |
@@ -77,6 +80,48 @@ and are completely unaffected. See `docs/per-client-policy.md`.
 `gw apply` validates the nftables ruleset (`nft -c`) and the Xray config
 (`xray -test`) **before** reloading anything. A config that would break the
 gateway is refused rather than half-applied.
+
+## Starting on boot
+
+Everything is tied together by a single unit, `gateway.target`:
+
+```bash
+systemctl status gateway.target            # is the stack up?
+systemctl list-dependencies gateway.target # what's in it
+sudo gw restart                            # restart the whole stack
+sudo gw enable                             # make it all start at boot
+```
+
+`gw apply` enables it for you, so a normal install needs none of this. Each
+member declares `PartOf=gateway.target`, which is what makes
+`systemctl restart gateway.target` propagate to all of them.
+
+Boot order matters here and is enforced:
+
+1. **`gw-network.service`** — policy routing and the firewall, pulled in from
+   `sysinit.target` and ordered before `network-pre.target`, the same way
+   Debian's own `nftables.service` is. There is no window during boot where
+   forwarding is unfiltered.
+2. **`chrony-wait.service`** — holds `time-sync.target` until the clock is
+   actually correct. Thin clients often have a flat CMOS battery and boot years
+   out of date; TLS and REALITY both fail on skew, so without this the tunnel
+   fails on every cold boot until chrony catches up.
+3. **`xray.service`** — ordered after `time-sync.target` and `network-online`,
+   and `Requires=gw-network.service`.
+4. **`AdGuardHome.service`** — ordered after Xray via a drop-in. Its upstream
+   DoH rides the tunnel, so starting first means a burst of failed lookups —
+   and a resolver that caches those failures serves them to the LAN until the
+   negative TTL expires.
+
+`tailscaled` is *Wanted* by the target but deliberately **not** `PartOf` it, so
+`gw restart` can't drop the Tailscale session you're using to run it.
+
+Every dependency is `Wants=`, never `Requires=`: a failed AdGuard shouldn't
+take the tunnel down, and a failed tunnel shouldn't stop DNS from serving the
+LAN.
+
+`gw check` verifies boot configuration as a separate section — "it works right
+now" and "it comes back after a power cut" are different claims.
 
 ## How it works
 

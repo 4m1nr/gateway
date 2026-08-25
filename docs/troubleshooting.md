@@ -95,6 +95,24 @@ resolved without DNS, which is the thing you're trying to fix.
   goes through the tunnel, but AdGuard won't see or filter it.
 - The client's gateway isn't actually the box. Check its routing table.
 
+## Nothing came back after a reboot
+
+```bash
+sudo gw check          # the "boot" section reports exactly which unit is not enabled
+systemctl status gateway.target
+journalctl -b -u gw-network -u xray
+```
+
+Usually one unit was never enabled — `sudo gw enable` fixes that. If the units
+are enabled but the tunnel failed at boot and recovered a minute later, the
+clock was wrong when Xray started: check that `chrony-wait.service` is enabled
+(`systemctl is-enabled chrony-wait`), and consider replacing the CMOS battery.
+
+If `gw-network` failed at boot, the firewall never loaded — meaning no
+interception *and* no kill switch. `journalctl -b -u gw-network` shows the nft
+error; it is almost always a ruleset referring to something that doesn't exist
+yet, such as the `xray` user.
+
 ## Tailscale can't connect
 
 If `route_control_via_xray = true`, tailscaled reaches the coordination server

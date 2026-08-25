@@ -39,6 +39,21 @@ for u in gw-network xray AdGuardHome tailscaled; do
   else bad "$u is $(systemctl is-active "$u")"; fi
 done
 
+# ------------------------------------------------------------ boot config --
+sec "boot"
+# "It works right now" and "it comes back after a power cut" are different
+# claims. This checks the second one.
+for u in gateway.target gw-network.service xray.service gw-health.timer gw-geoupdate.timer; do
+  if ! systemctl cat "$u" >/dev/null 2>&1; then bad "$u is not installed"
+  elif [ "$(systemctl is-enabled "$u" 2>/dev/null)" = "enabled" ]; then ok "$u enabled at boot"
+  else bad "$u is NOT enabled — it will not come back after a reboot (run: sudo gw enable)"; fi
+done
+for u in AdGuardHome.service tailscaled.service chrony-wait.service; do
+  if ! systemctl cat "$u" >/dev/null 2>&1; then skip "$u not installed"
+  elif systemctl is-enabled "$u" >/dev/null 2>&1; then ok "$u enabled at boot"
+  else bad "$u is NOT enabled at boot"; fi
+done
+
 # --------------------------------------------------------------- plumbing --
 sec "plumbing"
 if nft list table inet gateway >/dev/null 2>&1; then ok "nftables table loaded"

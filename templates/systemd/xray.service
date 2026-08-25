@@ -1,9 +1,13 @@
 [Unit]
 Description=Xray transparent proxy (gateway)
 Documentation=https://xtls.github.io/
-After=network-online.target gw-network.service chrony.service
-Wants=network-online.target
+# time-sync.target rather than chrony.service: an old thin client with a
+# flat CMOS battery boots with a wildly wrong clock, and TLS/REALITY fail
+# on skew. chrony-wait.service is what makes this target meaningful.
+After=network-online.target gw-network.service time-sync.target
+Wants=network-online.target time-sync.target
 Requires=gw-network.service
+PartOf=gateway.target
 
 [Service]
 Type=simple
@@ -29,4 +33,4 @@ RestrictSUIDSGID=true
 ReadOnlyPaths=/usr/local/etc/xray /usr/local/share/xray
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=gateway.target

@@ -66,10 +66,23 @@ sudo gw apply
 AdGuard's config is backed up on every merge to
 `/opt/AdGuardHome/AdGuardHome.yaml.bak`.
 
+## Stopping or restarting the stack
+
+```bash
+sudo gw restart     # restart everything (tailscaled is left alone on purpose)
+sudo gw disable     # stop it and remove it from boot — asks first
+sudo gw enable      # put it back
+```
+
+`gw disable` stops the firewall as well as the tunnel, so proxied clients lose
+connectivity entirely. If you want the LAN working while you investigate, use
+`gw panic` instead.
+
 ## Undoing the whole thing
 
 ```bash
 sudo gw panic
+sudo systemctl disable --now gateway.target
 sudo systemctl disable --now xray gw-network gw-health.timer gw-geoupdate.timer
 sudo systemctl disable --now AdGuardHome tailscaled
 sudo nft delete table ip gwpanic

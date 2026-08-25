@@ -154,6 +154,16 @@ def render_env(cfg: Config) -> str:
     )
 
 
+def target_wants(cfg: Config) -> str:
+    """Third-party units the gateway stack pulls in at boot."""
+    lines = ["Wants=AdGuardHome.service", "After=AdGuardHome.service"]
+    if cfg.ts_enabled:
+        # Wanted, but deliberately NOT PartOf the target: a restart of the
+        # stack must not drop the Tailscale session you are managing it over.
+        lines.append("Wants=tailscaled.service")
+    return "\n".join(lines) + "\n"
+
+
 def render_tailscale_args(cfg: Config) -> str:
     if not cfg.ts_enabled:
         return "# tailscale.enabled = false\n"
@@ -189,8 +199,19 @@ def render(cfg: Config, out: pathlib.Path) -> list[str]:
             continue
         text = unit.read_text()
         if "{{" in text:
-            text = subst(text, {"HEALTH_INTERVAL": str(cfg.health_interval)})
+            text = subst(
+                text,
+                {
+                    "HEALTH_INTERVAL": str(cfg.health_interval),
+                    "TARGET_WANTS": target_wants(cfg),
+                },
+            )
         files[f"etc/systemd/system/{unit.name}"] = text
+
+    # AdGuard installs its own unit, so it is extended rather than replaced.
+    files["etc/systemd/system/AdGuardHome.service.d/gw.conf"] = (
+        TPL / "systemd-dropin" / "adguard-gw.conf"
+    ).read_text()
 
     if cfg.ts_enabled and not cfg.ts_route_control:
         files["etc/systemd/system/tailscaled.service.d/gw-exception.conf"] = (

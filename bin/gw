@@ -5,6 +5,9 @@
 #   gw render        generate build/ from gateway.toml (safe, no changes)
 #   gw diff          show what apply would change
 #   gw apply         render, diff, install, reload
+#   gw enable        enable the whole stack to start on boot
+#   gw disable       stop the stack and remove it from boot
+#   gw restart       restart the whole stack
 #   gw status        what is running and whether the tunnel is up
 #   gw check         end-to-end verification, including leak tests
 #   gw client        add/remove/list per-client policy
@@ -20,6 +23,10 @@ export PYTHONPATH="$REPO/lib"
 PY=python3
 
 AGH_YAML=/opt/AdGuardHome/AdGuardHome.yaml
+# gateway.target is the umbrella; the rest are its members. tailscaled is
+# deliberately absent — it is Wanted by the target but not PartOf it, so
+# restarting the stack cannot drop the session you are managing it over.
+STACK=(gateway.target gw-network.service xray.service gw-health.timer gw-geoupdate.timer)
 NFT_LIVE=/etc/nftables.d/gateway.nft
 
 c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
@@ -97,8 +104,11 @@ cmd_apply() {
   fi
 
   systemctl daemon-reload
+
+  info "enabling the gateway stack for boot"
+  enable_stack
+
   info "reloading policy routing and firewall"
-  systemctl enable gw-network.service >/dev/null 2>&1 || true
   # restart, not `enable --now`: the unit is usually already running and would
   # otherwise keep serving the previous ruleset.
   systemctl restart gw-network.service
@@ -124,11 +134,61 @@ cmd_apply() {
     warn "AdGuard Home is not set up yet — run scripts/20-adguard.sh"
   fi
 
-  systemctl enable --now gw-health.timer gw-geoupdate.timer >/dev/null 2>&1 || true
+  systemctl start gateway.target
 
   info "verifying"
   sleep 3
   /usr/local/lib/gateway/health.sh || true
+  cmd_status
+}
+
+# ----------------------------------------------------------------- boot ----
+# Enabling gateway.target alone is not enough: [Install] symlinks are created
+# by enabling each member, and the target's Wants= only pulls in units that
+# exist. Enabling both is what makes a cold boot come up complete.
+enable_stack() {
+  systemctl enable "${STACK[@]}" >/dev/null 2>&1 \
+    || warn "some units could not be enabled — check 'systemctl status gateway.target'"
+  # AdGuard installs its own unit; ours is a drop-in on top of it.
+  if systemctl cat AdGuardHome.service >/dev/null 2>&1; then
+    systemctl enable AdGuardHome.service >/dev/null 2>&1 || true
+  fi
+  if systemctl cat tailscaled.service >/dev/null 2>&1; then
+    systemctl enable tailscaled.service >/dev/null 2>&1 || true
+  fi
+  # Boot with a wrong clock and TLS fails before chrony has stepped it. This is
+  # what gives time-sync.target — and so xray.service's ordering — any meaning.
+  if systemctl cat chrony-wait.service >/dev/null 2>&1; then
+    systemctl enable chrony-wait.service >/dev/null 2>&1 || true
+  fi
+}
+
+cmd_enable() {
+  need_root enable
+  enable_stack
+  systemctl start gateway.target
+  info "gateway.target enabled — the stack now starts on boot"
+  cmd_status
+}
+
+cmd_disable() {
+  need_root disable
+  warn "This stops the tunnel AND the firewall. Proxied clients lose"
+  warn "connectivity entirely; they do not fall back to a direct path."
+  warn "For a working-but-unproxied LAN, use 'gw panic' instead."
+  read -r -p "continue? [y/N] " reply
+  [[ "$reply" =~ ^[Yy]$ ]] || die "aborted"
+  systemctl stop gateway.target
+  systemctl disable "${STACK[@]}" >/dev/null 2>&1 || true
+  info "gateway.target disabled — nothing will start on the next boot"
+}
+
+cmd_restart() {
+  need_root restart
+  # PartOf= on each member makes this propagate; tailscaled is excluded on
+  # purpose so remote access survives.
+  systemctl restart gateway.target
+  sleep 3
   cmd_status
 }
 
@@ -145,10 +205,20 @@ cmd_status() {
   esac
   [ "$life" = "1" ] && printf 'lifeline    %sENGAGED%s — tailscaled is bypassing the tunnel\n' "$c_yel" "$c_off"
 
+  if systemctl cat gateway.target >/dev/null 2>&1; then
+    printf '%-11s %s (boot: %s)\n' "stack" \
+      "$(systemctl is-active gateway.target 2>/dev/null || echo inactive)" \
+      "$(systemctl is-enabled gateway.target 2>/dev/null || echo disabled)"
+  else
+    printf '%-11s %snot installed%s — run: sudo gw apply\n' "stack" "$c_yel" "$c_off"
+  fi
+
   for u in xray gw-network AdGuardHome tailscaled; do
     if systemctl list-unit-files "$u.service" >/dev/null 2>&1 && \
        systemctl cat "$u.service" >/dev/null 2>&1; then
-      printf '%-11s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || echo missing)"
+      printf '%-11s %s (boot: %s)\n' "$u" \
+        "$(systemctl is-active "$u" 2>/dev/null || echo missing)" \
+        "$(systemctl is-enabled "$u" 2>/dev/null || echo disabled)"
     fi
   done
 
@@ -218,6 +288,9 @@ case "${1:-}" in
   render) shift; cmd_render "$@" ;;
   diff)   shift; cmd_diff "$@" || true ;;
   apply)  shift; cmd_apply "$@" ;;
+  enable)  shift; cmd_enable "$@" ;;
+  disable) shift; cmd_disable "$@" ;;
+  restart) shift; cmd_restart "$@" ;;
   status) shift; cmd_status "$@" ;;
   check)  shift; cmd_check "$@" ;;
   client) shift; cmd_client "$@" ;;

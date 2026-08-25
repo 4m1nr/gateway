@@ -57,6 +57,34 @@ for f in tests/fixtures/*.toml; do
   if grep -q '"mark":' "$OUT/$name/usr/local/etc/xray/config.json"; then
     ok "$name: xray outbounds carry SO_MARK"
   else bad "$name: xray outbounds are missing SO_MARK"; fi
+
+  # Boot behaviour: the target must exist, and every member must declare an
+  # [Install] section, or the stack silently fails to come back after a reboot.
+  units="$OUT/$name/etc/systemd/system"
+  if [ -f "$units/gateway.target" ]; then ok "$name: gateway.target rendered"
+  else bad "$name: gateway.target MISSING — nothing ties the stack together"; fi
+
+  missing=""
+  for u in gw-network.service xray.service gw-health.timer gw-geoupdate.timer; do
+    grep -q '^\[Install\]' "$units/$u" || missing="$missing $u"
+  done
+  if [ -z "$missing" ]; then ok "$name: every stack unit is installable"
+  else bad "$name: no [Install] section in:$missing"; fi
+
+  # PartOf is what makes `systemctl restart gateway.target` propagate.
+  missing=""
+  for u in gw-network.service xray.service gw-health.timer gw-geoupdate.timer; do
+    grep -q '^PartOf=gateway.target' "$units/$u" || missing="$missing $u"
+  done
+  if [ -z "$missing" ]; then ok "$name: stack units are PartOf gateway.target"
+  else bad "$name: PartOf=gateway.target missing from:$missing"; fi
+
+  # tailscaled must NOT be PartOf: restarting the stack would drop the session
+  # you are almost certainly using to manage the box.
+  if grep -q '^PartOf=gateway.target' "$units/AdGuardHome.service.d/gw.conf" 2>/dev/null \
+     && ! grep -rq 'PartOf=gateway.target' "$units/tailscaled.service.d" 2>/dev/null; then
+    ok "$name: AdGuard is PartOf the stack, tailscaled is not"
+  else bad "$name: tailscaled must not be PartOf gateway.target"; fi
 done
 
 echo

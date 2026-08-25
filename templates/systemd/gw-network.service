@@ -8,6 +8,7 @@ Before=network-pre.target network.target xray.service
 DefaultDependencies=no
 Conflicts=shutdown.target
 Before=shutdown.target
+PartOf=gateway.target
 
 [Service]
 Type=oneshot
@@ -18,4 +19,7 @@ ExecStop=/usr/local/lib/gateway/ip-rules.sh down
 ExecStop=-/usr/sbin/nft delete table inet gateway
 
 [Install]
-WantedBy=multi-user.target
+# sysinit.target, not multi-user.target: this runs before
+# network-pre.target, so being pulled in at multi-user time would invert
+# the ordering it exists to guarantee.
+WantedBy=sysinit.target

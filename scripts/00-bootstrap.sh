@@ -26,6 +26,12 @@ fi
 info "enabling chrony"
 systemctl enable --now chrony
 chronyc makestep >/dev/null 2>&1 || true
+# chrony-wait holds time-sync.target until the clock is actually synced, which
+# is what xray.service orders itself after. Thin clients often have a flat CMOS
+# battery and boot years out of date; without this the tunnel fails at every
+# boot until chrony catches up.
+systemctl enable chrony-wait.service 2>/dev/null \
+  || warn "chrony-wait.service unavailable — Xray may start before the clock is correct"
 
 info "capping the journal (thin-client flash is small and slow)"
 JMAX=$(sed -n 's/^journal_max_use *= *"\(.*\)"/\1/p' "$CONFIG" | head -1)

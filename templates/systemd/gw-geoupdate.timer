@@ -1,10 +1,12 @@
 [Unit]
 Description=Weekly Xray geodata refresh
 
+PartOf=gateway.target
+
 [Timer]
 OnCalendar=Sun 04:30
 RandomizedDelaySec=1h
 Persistent=true
 
 [Install]
-WantedBy=timers.target
+WantedBy=gateway.target

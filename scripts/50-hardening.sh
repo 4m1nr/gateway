@@ -35,7 +35,7 @@ CONF
     /etc/apt/apt.conf.d/50unattended-upgrades 2>/dev/null || true
 fi
 
-info "enabling the watchdog and geodata timers"
-systemctl enable --now gw-health.timer gw-geoupdate.timer
+info "enabling the gateway stack for boot"
+"$REPO/bin/gw" enable
 
 info "done — run 'sudo gw check' to verify the whole path"
