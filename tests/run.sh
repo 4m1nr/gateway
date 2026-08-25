@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Offline test suite. Runs anywhere — no gateway, no root, no network.
+#
+# Every fixture is rendered and the resulting nftables ruleset is fed to a real
+# `nft -c`, inside an unprivileged user namespace when not run as root. That
+# catches syntax and semantic errors (overlapping intervals, bad matches)
+# before they can take the LAN offline.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+export PYTHONPATH="$PWD/lib"
+
+PASS=0; FAIL=0
+c_red=$'\033[31m'; c_grn=$'\033[32m'; c_off=$'\033[0m'
+ok()  { printf '  %s✓%s %s\n' "$c_grn" "$c_off" "$*"; PASS=$((PASS+1)); }
+bad() { printf '  %s✗%s %s\n' "$c_red" "$c_off" "$*"; FAIL=$((FAIL+1)); }
+
+OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
+
+nft_check() {
+  if [ "$(id -u)" -eq 0 ]; then nft -c -f "$1" 2>&1
+  elif unshare -rn true 2>/dev/null; then unshare -rn nft -c -f "$1" 2>&1
+  else echo "SKIP"; fi
+}
+
+echo "== valid fixtures =="
+for f in tests/fixtures/*.toml; do
+  name=$(basename "$f" .toml)
+  if ! err=$(python3 lib/render.py "$f" "$OUT/$name" 2>&1 >/dev/null); then
+    bad "$name: render failed: $err"; continue
+  fi
+  ok "$name: renders"
+
+  if python3 -c "import json,sys;json.load(open(sys.argv[1]))" \
+       "$OUT/$name/usr/local/etc/xray/config.json" 2>/dev/null; then
+    ok "$name: xray config is valid JSON"
+  else bad "$name: xray config is not valid JSON"; fi
+
+  res=$(nft_check "$OUT/$name/etc/nftables.d/gateway.nft")
+  if [ "$res" = "SKIP" ]; then
+    printf '  – %s: nft check skipped (no userns and not root)\n' "$name"
+  elif [ -z "$res" ]; then ok "$name: nftables ruleset accepted by nft -c"
+  else bad "$name: nft rejected the ruleset: $res"; fi
+
+  # Shipping a ruleset without the kill switch would silently turn fail-closed
+  # into fail-open, which is the one failure mode that must never regress.
+  if grep -q 'comment "killswitch"' "$OUT/$name/etc/nftables.d/gateway.nft"; then
+    ok "$name: killswitch rule present"
+  else bad "$name: KILLSWITCH RULE MISSING"; fi
+
+  # The loop guards are equally load-bearing: without them the box wedges the
+  # moment interception is enabled.
+  nftf="$OUT/$name/etc/nftables.d/gateway.nft"
+  if grep -q 'meta mark \$MARK_XRAY return' "$nftf" && grep -q 'meta skuid "xray" return' "$nftf"; then
+    ok "$name: both output-chain loop guards present"
+  else bad "$name: loop guard missing from the output chain"; fi
+
+  if grep -q '"mark":' "$OUT/$name/usr/local/etc/xray/config.json"; then
+    ok "$name: xray outbounds carry SO_MARK"
+  else bad "$name: xray outbounds are missing SO_MARK"; fi
+done
+
+echo
+echo "== invalid configs must be rejected =="
+for f in tests/invalid/*.toml; do
+  name=$(basename "$f" .toml)
+  if python3 lib/render.py "$f" "$OUT/bad-$name" >/dev/null 2>&1; then
+    bad "$name: was ACCEPTED but should have been rejected"
+  else
+    ok "$name: rejected ($(python3 lib/render.py "$f" "$OUT/bad-$name" 2>&1 | head -1 | cut -c1-70))"
+  fi
+done
+
+echo
+echo "== shell syntax =="
+for f in bin/gw scripts/*.sh templates/lib/*.sh lib/common.sh; do
+  if bash -n "$f" 2>/dev/null || sh -n "$f" 2>/dev/null; then ok "$(basename "$f")"
+  else bad "$(basename "$f") has a syntax error"; fi
+done
+
+echo
+echo "== python =="
+for f in lib/*.py; do
+  if python3 -m py_compile "$f" 2>/dev/null; then ok "$(basename "$f")"
+  else bad "$(basename "$f") does not compile"; fi
+done
+
+echo
+printf '%d passed, %d failed\n' "$PASS" "$FAIL"
+[ "$FAIL" -eq 0 ]

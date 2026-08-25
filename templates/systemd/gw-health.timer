@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the gateway tunnel health check
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec={{HEALTH_INTERVAL}}s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

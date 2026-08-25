@@ -1,0 +1,14 @@
+# Pinned component versions. `gw update` bumps these after you edit them here.
+#
+# sha256: leave empty to verify against the checksum the project publishes
+# alongside the release (catches corrupted or truncated downloads, but not a
+# compromised release — it comes from the same host). Paste a known-good digest
+# here to make verification actually authenticated.
+
+[xray]
+version = "v25.9.11"
+sha256  = ""
+
+[adguard]
+version = "v0.107.68"
+sha256  = ""

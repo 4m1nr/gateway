@@ -1,0 +1,6 @@
+# Local machine state — never commit
+gateway.toml
+build/
+secrets/
+*.bak
+__pycache__/

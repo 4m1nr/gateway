@@ -1,0 +1,182 @@
+# ============================================================================
+#  Gateway — single source of truth
+#
+#  Copy to gateway.toml (gitignored) or generate it with `gw init`.
+#  Every config on the box is rendered from this file: `gw apply`.
+#  Nothing here is edited on the box directly — edit here, re-apply.
+# ============================================================================
+
+[net]
+# Interface facing the router. `gw init` detects this.
+wan_if     = "eth0"
+# The home LAN this box sits on.
+lan_cidr   = "192.168.1.0/24"
+# The router (this box's own default gateway).
+router     = "192.168.1.1"
+# Static address for this box. MUST be outside the router's DHCP pool.
+static_ip  = "192.168.1.2"
+prefix_len = 24
+
+[ipv6]
+# "off"  — disable v6 on wan_if and drop forwarded v6 (recommended, and what
+#          this setup is built around: opt-in-per-device cannot control a v6
+#          default route, which comes from the router's RAs).
+# "pass" — leave v6 alone entirely (leaks around the tunnel; do not use unless
+#          you know why you want it).
+mode = "off"
+
+# ============================================================================
+#  Xray
+# ============================================================================
+[xray]
+tproxy_port     = 12345    # dokodemo-door, TPROXY target
+socks_port      = 10808    # loopback only, for manual use + health probes
+http_port       = 10809    # loopback only
+api_port        = 10085    # loopback-only stats API, used by `gw check`
+log_level       = "warning"
+domain_strategy = "IPIfNonMatch"
+# SO_MARK stamped on every Xray outbound so its own packets skip the OUTPUT
+# marking rule. Changing this means changing the nftables rule too.
+outbound_mark   = 255
+
+# Your existing XHTTP server. From a vless:// link:
+#   vless://<uuid>@<address>:<port>?type=xhttp&path=<path>&host=<host>
+#                                  &security=tls&sni=<sni>&fp=chrome&mode=auto
+[xray.server]
+tag        = "proxy"
+address    = "example.com"
+port       = 443
+uuid       = "11112222-3333-4444-5555-666677778888"
+encryption = "none"
+
+# Optional: pin the server's IP so Xray never needs DNS to reach it. Strongly
+# recommended when the address is a bare domain — removes a boot-time
+# chicken-and-egg (DNS needs the tunnel, the tunnel needs DNS).
+# Leave empty for a CDN-fronted host, whose IP legitimately rotates.
+resolved_ip = "203.0.113.10"
+
+# --- XHTTP transport ---
+path        = "/xhttp"
+host        = ""          # empty = use `address`
+mode        = "auto"      # auto | packet-up | stream-up | stream-one
+x_padding   = ""          # xPaddingBytes, e.g. "100-1000"; empty = Xray default
+
+# --- Security layer ---
+security    = "tls"       # tls | reality | none
+sni         = ""          # empty = use `address`
+fingerprint = "chrome"
+alpn        = ["h2", "http/1.1"]
+allow_insecure = false
+# reality only:
+public_key  = ""
+short_id    = ""
+spider_x    = "/"
+
+# Optional second server. When enabled, Xray load-balances with a burst
+# observatory so a dead server fails over instead of taking you offline.
+[xray.fallback]
+enabled = false
+# Same keys as [xray.server].
+
+# ============================================================================
+#  Split routing — what goes direct vs through the tunnel
+# ============================================================================
+[routing]
+direct_geosite = ["geosite:private", "geosite:category-ir"]
+direct_geoip   = ["geoip:private", "geoip:ir"]
+block_geosite  = []          # e.g. ["geosite:category-ads-all"]
+block_bittorrent = false     # true = drop torrent traffic at the gateway
+
+# ============================================================================
+#  DNS
+# ============================================================================
+[dns]
+# LAN-facing resolver (AdGuard Home).
+adguard_port    = 53
+adguard_ui_port = 3000
+# Resolved through the tunnel. IP literals only — a hostname here would need
+# DNS to resolve the DNS server.
+upstreams_proxied = ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
+# Resolved direct, for domestic names. Shecan / ISP / national resolvers.
+upstreams_direct  = ["178.22.122.100", "185.51.200.2"]
+# Domains sent to upstreams_direct.
+direct_suffixes   = ["ir"]
+bootstrap         = ["1.1.1.1", "8.8.8.8"]
+blocklists = [
+  "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt",
+  "https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt",
+]
+# Query log retention. Thin-client flash is small — keep this short.
+querylog_days = 3
+statslog_days = 7
+
+# ============================================================================
+#  Per-client policy
+#
+#  policy = "proxy"   intercepted and sent through Xray (split rules apply)
+#           "direct"  forwarded straight out to the router, never touched
+#           "block"   dropped at the gateway
+#
+#  These are the devices that have opted in by pointing their default gateway
+#  at this box. A device not listed here and not using this box as its gateway
+#  is simply unaffected. A device that DOES use this box as its gateway but is
+#  not listed gets `default_policy` below.
+#
+#  Give opted-in devices a static IP (or a router DHCP reservation) — the
+#  policy is keyed to the address.
+# ============================================================================
+default_policy = "proxy"
+
+[[client]]
+ip     = "192.168.1.50"
+name   = "laptop"
+policy = "proxy"
+
+[[client]]
+ip     = "192.168.1.60"
+name   = "tv"
+policy = "block"
+
+# ============================================================================
+#  Tailscale
+# ============================================================================
+[tailscale]
+enabled        = false
+ssh            = true
+exit_node      = true      # advertise as exit node
+subnet_router  = true      # advertise lan_cidr to the tailnet
+# Exit-node traffic (from 100.64.0.0/10) goes through Xray, so a remote device
+# using this box as its exit node comes out of your Xray server.
+proxy_tailnet_egress = true
+# Route tailscaled's own control-plane + DERP traffic through Xray. Needed if
+# Tailscale is blocked upstream. Cost: when Xray dies, so does your remote
+# admin path — hence the lifeline below.
+route_control_via_xray = true
+# After this many minutes of sustained tunnel failure, let tailscaled talk
+# direct so you can still SSH in and fix things. 0 disables the lifeline.
+lifeline_after_min = 10
+
+# ============================================================================
+#  Health watchdog
+# ============================================================================
+[health]
+interval_sec        = 30
+probe_url           = "https://www.gstatic.com/generate_204"
+probe_timeout_sec   = 8
+# A domestic site, used by `gw check` to prove the split is really splitting.
+domestic_probe_url  = "https://www.irna.ir"
+restart_after_fails = 3     # consecutive failures before restarting Xray
+fallback_after_fails = 6    # before switching to [xray.fallback]
+
+# ============================================================================
+#  System
+# ============================================================================
+[system]
+timezone         = "Asia/Tehran"
+journal_max_use  = "200M"
+zram             = true
+bbr              = true
+unattended_upgrades = true
+# SSH stays reachable from these sources only.
+ssh_allow_lan    = true
+ssh_allow_tailnet = true

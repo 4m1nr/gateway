@@ -1,0 +1,21 @@
+[Unit]
+Description=Gateway policy routing and firewall
+# Same ordering as Debian's nftables.service: the ruleset must be in place
+# before any interface comes up, so there is no window where forwarding is
+# unfiltered.
+Wants=network-pre.target
+Before=network-pre.target network.target xray.service
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/gateway/ip-rules.sh up
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/gateway.nft
+ExecStop=/usr/local/lib/gateway/ip-rules.sh down
+ExecStop=-/usr/sbin/nft delete table inet gateway
+
+[Install]
+WantedBy=multi-user.target

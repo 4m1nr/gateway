@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+# gw — the only command you should need on this box.
+#
+#   gw init          interview -> gateway.toml (parses a vless:// link)
+#   gw render        generate build/ from gateway.toml (safe, no changes)
+#   gw diff          show what apply would change
+#   gw apply         render, diff, install, reload
+#   gw status        what is running and whether the tunnel is up
+#   gw check         end-to-end verification, including leak tests
+#   gw client        add/remove/list per-client policy
+#   gw update        binaries, geodata, blocklists
+#   gw panic         disable interception, plain NAT, keep the LAN online
+#   gw logs          follow the relevant journals
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG="${GW_CONFIG:-$REPO/gateway.toml}"
+BUILD="$REPO/build"
+export PYTHONPATH="$REPO/lib"
+PY=python3
+
+AGH_YAML=/opt/AdGuardHome/AdGuardHome.yaml
+NFT_LIVE=/etc/nftables.d/gateway.nft
+
+c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
+info() { printf '%s==>%s %s\n' "$c_grn" "$c_off" "$*"; }
+warn() { printf '%s[!]%s %s\n' "$c_yel" "$c_off" "$*" >&2; }
+die()  { printf '%s[x]%s %s\n' "$c_red" "$c_off" "$*" >&2; exit 1; }
+need_root() { [ "$(id -u)" -eq 0 ] || die "$1 needs root (try: sudo gw $1)"; }
+
+# ---------------------------------------------------------------- render ----
+cmd_render() {
+  $PY "$REPO/lib/render.py" "$CONFIG" "$BUILD"
+}
+
+# ------------------------------------------------------------------ diff ----
+# Compares the staged tree against the live filesystem. Returns 1 if anything
+# differs, which is what apply uses to decide whether a reload is needed.
+cmd_diff() {
+  [ -d "$BUILD" ] || cmd_render >/dev/null
+  local changed=0
+  while IFS= read -r -d '' staged; do
+    local rel="${staged#"$BUILD"/}"
+    case "$rel" in adguard-overrides.json|tailscale-args) continue ;; esac
+    local live="/$rel"
+    if [ ! -f "$live" ]; then
+      printf '%snew%s      %s\n' "$c_grn" "$c_off" "$live"; changed=1
+    elif ! diff -q "$live" "$staged" >/dev/null; then
+      printf '%schanged%s  %s\n' "$c_yel" "$c_off" "$live"
+      diff -u --color=always "$live" "$staged" | sed '1,2d;s/^/    /' || true
+      changed=1
+    fi
+  done < <(find "$BUILD" -type f -print0)
+  [ "$changed" -eq 0 ] && info "no changes"
+  return $changed
+}
+
+# ----------------------------------------------------------------- apply ----
+cmd_apply() {
+  local dry=0
+  [ "${1:-}" = "--dry-run" ] && dry=1
+  need_root apply
+
+  info "rendering from $CONFIG"
+  cmd_render
+
+  # The nftables ruleset references the xray user by name; nft resolves it at
+  # load time, so the account has to exist before the firewall is loaded.
+  if ! id xray >/dev/null 2>&1; then
+    info "creating the xray system user"
+    useradd --system --no-create-home --shell /usr/sbin/nologin xray
+  fi
+
+  info "changes to be applied:"
+  cmd_diff || true
+  if [ "$dry" -eq 1 ]; then info "dry run — nothing written"; return 0; fi
+
+  info "installing files"
+  while IFS= read -r -d '' staged; do
+    local rel="${staged#"$BUILD"/}"
+    case "$rel" in adguard-overrides.json|tailscale-args) continue ;; esac
+    local live="/$rel" mode=644
+    case "$rel" in usr/local/lib/gateway/*.sh) mode=755 ;; esac
+    install -D -m "$mode" "$staged" "$live"
+  done < <(find "$BUILD" -type f -print0)
+
+  info "applying sysctl"
+  sysctl --system >/dev/null
+
+  info "validating the ruleset before loading it"
+  nft -c -f "$NFT_LIVE" || die "nftables ruleset rejected — nothing was reloaded"
+
+  if [ -x /usr/local/bin/xray ]; then
+    info "validating the Xray config"
+    /usr/local/bin/xray run -test -config /usr/local/etc/xray/config.json >/dev/null \
+      || die "Xray rejected its config — nothing was reloaded"
+  fi
+
+  systemctl daemon-reload
+  info "reloading policy routing and firewall"
+  systemctl enable gw-network.service >/dev/null 2>&1 || true
+  # restart, not `enable --now`: the unit is usually already running and would
+  # otherwise keep serving the previous ruleset.
+  systemctl restart gw-network.service
+
+  if systemctl list-unit-files gw-tailscale-exception.service >/dev/null 2>&1 \
+     && [ -f /etc/systemd/system/gw-tailscale-exception.service ]; then
+    systemctl enable --now gw-tailscale-exception.service >/dev/null 2>&1 || true
+  fi
+
+  if [ -x /usr/local/bin/xray ]; then
+    info "restarting Xray"
+    systemctl enable xray >/dev/null 2>&1 || true
+    systemctl restart xray
+  else
+    warn "xray is not installed yet — run scripts/10-xray.sh"
+  fi
+
+  if [ -f "$AGH_YAML" ]; then
+    info "merging AdGuard Home settings"
+    $PY "$REPO/lib/agh_merge.py" "$AGH_YAML" "$BUILD/adguard-overrides.json"
+    systemctl restart AdGuardHome 2>/dev/null || true
+  else
+    warn "AdGuard Home is not set up yet — run scripts/20-adguard.sh"
+  fi
+
+  systemctl enable --now gw-health.timer gw-geoupdate.timer >/dev/null 2>&1 || true
+
+  info "verifying"
+  sleep 3
+  /usr/local/lib/gateway/health.sh || true
+  cmd_status
+}
+
+# ---------------------------------------------------------------- status ----
+cmd_status() {
+  local tunnel; tunnel=$(cat /run/gateway/tunnel 2>/dev/null || echo unknown)
+  local fails;  fails=$(cat /run/gateway/fails 2>/dev/null || echo 0)
+  local life;   life=$(cat /run/gateway/lifeline 2>/dev/null || echo 0)
+
+  case "$tunnel" in
+    up)   printf 'tunnel      %sUP%s\n' "$c_grn" "$c_off" ;;
+    down) printf 'tunnel      %sDOWN%s (%s consecutive failed probes)\n' "$c_red" "$c_off" "$fails" ;;
+    *)    printf 'tunnel      %sunknown%s (health check has not run yet)\n' "$c_yel" "$c_off" ;;
+  esac
+  [ "$life" = "1" ] && printf 'lifeline    %sENGAGED%s — tailscaled is bypassing the tunnel\n' "$c_yel" "$c_off"
+
+  for u in xray gw-network AdGuardHome tailscaled; do
+    if systemctl list-unit-files "$u.service" >/dev/null 2>&1 && \
+       systemctl cat "$u.service" >/dev/null 2>&1; then
+      printf '%-11s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || echo missing)"
+    fi
+  done
+
+  if nft list table inet gateway >/dev/null 2>&1; then
+    printf 'firewall    loaded\n'
+    local proxied drops
+    proxied=$(nft list set inet gateway proxy_clients 2>/dev/null \
+              | sed -n 's/.*elements = { \(.*\) }.*/\1/p')
+    drops=$(nft list chain inet gateway forward 2>/dev/null \
+            | grep killswitch | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+')
+    printf '%s  proxied sources : %s%s\n' "$c_dim" "${proxied:-none}" "$c_off"
+    printf '%s  killswitch drops: %s%s\n' "$c_dim" "${drops:-0}" "$c_off"
+  else
+    printf 'firewall    %snot loaded%s\n' "$c_red" "$c_off"
+  fi
+
+  command -v tailscale >/dev/null && tailscale status --peers=false 2>/dev/null | head -3 || true
+}
+
+# ----------------------------------------------------------------- check ----
+cmd_check() { need_root check; "$REPO/scripts/90-verify.sh" "$@"; }
+
+# ---------------------------------------------------------------- client ----
+cmd_client() { $PY "$REPO/lib/clients.py" "$CONFIG" "$@"; }
+
+# ----------------------------------------------------------------- init ----
+cmd_init() { $PY "$REPO/lib/init.py" "$REPO" "$CONFIG" "$@"; }
+
+# ---------------------------------------------------------------- update ----
+cmd_update() {
+  need_root update
+  info "updating geodata"
+  /usr/local/lib/gateway/geoupdate.sh || warn "geodata update failed"
+  info "updating packages"
+  apt-get update -qq && apt-get -y upgrade
+  info "re-applying config"
+  cmd_apply
+}
+
+# ----------------------------------------------------------------- panic ----
+cmd_panic() {
+  need_root panic
+  warn "disabling interception — ALL traffic will go out unproxied via the router"
+  nft delete table inet gateway 2>/dev/null || true
+  /usr/local/lib/gateway/ip-rules.sh down || true
+  systemctl stop gw-health.timer 2>/dev/null || true
+  sysctl -qw net.ipv4.ip_forward=1
+  nft -f - <<'NFT'
+table ip gwpanic
+delete table ip gwpanic
+table ip gwpanic {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        masquerade
+    }
+}
+NFT
+  warn "panic mode active. Clients keep working, unproxied. Run 'gw apply' to restore."
+}
+
+# ------------------------------------------------------------------ logs ----
+cmd_logs() { journalctl -fu xray -u gw-network -u gw-health -u AdGuardHome -t gw-health "$@"; }
+
+usage() { awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "${BASH_SOURCE[0]}"; }
+
+case "${1:-}" in
+  render) shift; cmd_render "$@" ;;
+  diff)   shift; cmd_diff "$@" || true ;;
+  apply)  shift; cmd_apply "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  check)  shift; cmd_check "$@" ;;
+  client) shift; cmd_client "$@" ;;
+  init)   shift; cmd_init "$@" ;;
+  update) shift; cmd_update "$@" ;;
+  panic)  shift; cmd_panic "$@" ;;
+  logs)   shift; cmd_logs "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) die "unknown command: $1 (try: gw help)" ;;
+esac
