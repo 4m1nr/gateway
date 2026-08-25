@@ -495,6 +495,22 @@ else
 fi
 
 echo
+echo "== rp_filter is disabled on every interface, not just the WAN =="
+# The reverse-path check before local delivery runs with mark 0, so it skips
+# the fwmark rule and can land in another table (Tailscale installs one that
+# matches everything). With rp_filter on, the mismatch is a martian and the
+# packet dies between prerouting and input with no counter anywhere.
+# The effective value is max(all, <iface>), so setting `all` alone is not enough.
+if grep -q 'for f in /proc/sys/net/ipv4/conf/\*/rp_filter' templates/lib/ip-rules.sh; then
+  ok "ip-rules.sh clears rp_filter on every interface"
+else
+  bad "ip-rules.sh only sets rp_filter for some interfaces — later ones (tailscale0) will keep the default"
+fi
+if grep -q 'reverse (rp_filter, mark 0)' bin/gw; then
+  ok "gw diag shows the reverse-path lookup"
+else bad "gw diag does not show the reverse-path lookup"; fi
+
+echo
 echo "== sbin tools are reachable regardless of the caller's PATH =="
 # nft, sysctl and ip live in /usr/sbin, which is absent from some root PATHs.
 # Calling them by bare name made `gw status` report "firewall not loaded"

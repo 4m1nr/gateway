@@ -447,6 +447,35 @@ cmd_diag() {
   printf '  %-16s %s\n' "default" "$(gw_env DEFAULT_POLICY)"
   printf '  %-16s %s\n' "lan_cidr" "$(gw_env LAN_CIDR)"
 
+  # The decisive test: ask the kernel what it does with a packet shaped like
+  # the client's, instead of reasoning about the rules.
+  printf '\n%s== kernel routing decision ==%s\n' "$c_grn" "$c_off"
+  local wan probe_dst
+  wan=$(gw_env WAN_IF)
+  probe_dst=1.1.1.1
+  if [ -n "$client" ]; then
+    printf '  forward (marked, as after tproxy):\n'
+    ip route get "$probe_dst" from "$client" iif "$wan" mark 1 2>&1 | sed 's/^/    /'
+    # This is the lookup that validates the reverse path, and it runs with
+    # mark 0 — so it ignores our fwmark rule and can land in another table.
+    printf '  reverse (rp_filter, mark 0):\n'
+    ip route get "$client" from "$probe_dst" 2>&1 | sed 's/^/    /'
+  fi
+
+  printf '  rp_filter:'
+  for f in /proc/sys/net/ipv4/conf/*/rp_filter; do
+    printf ' %s=%s' "$(basename "$(dirname "$f")")" "$(cat "$f")"
+  done
+  printf '\n'
+
+  # -EXDEV drops land in these counters and nowhere else.
+  if command -v nstat >/dev/null 2>&1; then
+    printf '  kernel drops: %s\n' \
+      "$(nstat -az 2>/dev/null \
+         | grep -iE 'rpfilter|martian|InAddrErrors|InNoRoutes' \
+         | awk '{printf "%s=%s ", $1, $2}')"
+  fi
+
   printf '\n%s== forwarding ==%s\n' "$c_grn" "$c_off"
   printf '  ip_forward=%s rp_filter=%s send_redirects=%s\n' \
     "$(cat /proc/sys/net/ipv4/ip_forward)" \
