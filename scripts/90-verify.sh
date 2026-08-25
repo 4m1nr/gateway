@@ -183,6 +183,28 @@ if command -v dig >/dev/null; then
   if dig +short +time=5 +tries=1 @"$BOX_IP" irna.ir | grep -qE '^[0-9]'; then
     ok "domestic names resolve"
   else bad "domestic names do not resolve — check the [/ir/] upstream split"; fi
+
+  # Poisoning canary. A public name answering with private or reserved space
+  # is a filtered resolver, not a real answer — and it is quiet, because that
+  # address sits in bypass_dst, so the connection is never intercepted and
+  # fails mid-TLS-handshake looking like a broken tunnel instead of bad DNS.
+  poisoned=""
+  for name in www.google.com cloudflare.com github.com; do
+    for a in $(dig +short +time=5 +tries=1 A "$name" @"$BOX_IP" 2>/dev/null \
+               | grep -E '^[0-9]+\.'); do
+      case "$a" in
+        10.*|127.*|0.*|169.254.*|192.168.*) poisoned="$poisoned $name=$a" ;;
+        172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) poisoned="$poisoned $name=$a" ;;
+      esac
+    done
+  done
+  if [ -z "$poisoned" ]; then
+    ok "no DNS poisoning detected (public names resolve to public addresses)"
+  else
+    bad "DNS is returning private addresses for public names:$poisoned
+     That is a filtering resolver. Check AdGuard's upstreams — fallback_dns
+     must not point at a resolver that lies."
+  fi
 else skip "dig not installed"; fi
 
 # ------------------------------------------------------------------- ipv6 --

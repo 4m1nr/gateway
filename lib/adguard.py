@@ -60,7 +60,15 @@ def overrides(cfg: Config) -> dict:
             "port": cfg.dns_port,
             "upstream_dns": upstreams,
             "bootstrap_dns": cfg.bootstrap,
-            "fallback_dns": cfg.up_direct,
+            # Deliberately empty. Falling back to the domestic resolvers means
+            # that whenever DoH is slow — which is exactly when the network is
+            # being interfered with — AdGuard asks a resolver that lies, and
+            # cheerfully caches the lie. A poisoned answer pointing at private
+            # space (10.10.34.34 and friends) is worse than no answer: that
+            # address is in bypass_dst, so the connection is never intercepted,
+            # goes out direct, and dies mid-TLS-handshake looking like a broken
+            # tunnel. Fail closed on DNS, like everything else here.
+            "fallback_dns": [],
             "upstream_mode": "load_balance",
             "ratelimit": 0,
             "enable_dnssec": True,
