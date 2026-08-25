@@ -11,6 +11,7 @@
 #   gw status        what is running and whether the tunnel is up
 #   gw check         end-to-end verification, including leak tests
 #   gw diag [ip]     why a client's traffic is or is not being intercepted
+#   gw trace <ip>    follow one client's packets rule by rule, live
 #   gw client        add/remove/list per-client policy
 #   gw job           add/remove/list scheduled jobs
 #   gw web-passwd    set the dashboard password
@@ -491,6 +492,51 @@ Reading this:
 HINT
 }
 
+# ----------------------------------------------------------------- trace ----
+# Counters say which rules fired; they cannot say which rules ONE client's
+# packets went through, or where they stopped. nftrace does exactly that:
+# every chain, every rule, every verdict, for the packets you select.
+cmd_trace() {
+  need_root trace
+  local client="${1:-}"
+  local secs="${2:-20}"
+  [ -n "$client" ] || die "usage: gw trace <client-ip> [seconds]"
+  nft list table inet gateway >/dev/null 2>&1 \
+    || die "the gateway table is not loaded — run 'sudo gw apply'"
+
+  # insert, not add: tracing has to be switched on before any rule can decide
+  # the packet's fate, so it belongs at the top of the chain.
+  nft insert rule inet gateway prerouting ip saddr "$client" meta nftrace set 1 \
+    || die "could not install the trace rule"
+
+  cleanup_trace() {
+    local h
+    h=$(nft -a list chain inet gateway prerouting 2>/dev/null \
+        | awk "/nftrace set 1/ && /$client/ {print \$NF}" | head -1)
+    [ -n "$h" ] && nft delete rule inet gateway prerouting handle "$h" 2>/dev/null
+    info "trace rule removed"
+  }
+  trap cleanup_trace EXIT INT TERM
+
+  info "tracing $client for ${secs}s — generate traffic on that device now"
+  printf '%s(each line is one rule the packet reached; the last line before a
+' "$c_dim"
+  printf ' gap is where it stopped)%s\n\n' "$c_off"
+  timeout "$secs" nft monitor trace || true
+
+  cleanup_trace
+  trap - EXIT INT TERM
+  cat <<'HINT'
+
+Reading a trace:
+  ...prerouting...tproxy...      the packet was handed to Xray
+  ...input...accept              it reached the local socket
+  ...input...drop / policy drop  it died in the input chain
+  no output at all               the packet never reached this box: the client
+                                 is not using it as a gateway
+HINT
+}
+
 # ---------------------------------------------------------------- client ----
 cmd_client() { $PY "$REPO/lib/clients.py" "$CONFIG" "$@"; }
 cmd_job()    { $PY "$REPO/lib/jobs.py"    "$CONFIG" "$@"; }
@@ -656,6 +702,7 @@ case "${1:-}" in
   status) shift; cmd_status "$@" ;;
   check)  shift; cmd_check "$@" ;;
   diag)   shift; cmd_diag "$@" ;;
+  trace)  shift; cmd_trace "$@" ;;
   client) shift; cmd_client "$@" ;;
   job)    shift; cmd_job "$@" ;;
   web-passwd) shift; cmd_web_passwd "$@" ;;

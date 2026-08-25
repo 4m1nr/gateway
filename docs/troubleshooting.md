@@ -118,6 +118,40 @@ If port 53 is taken, `systemd-resolved`'s stub listener is still running —
 check that `upstreams_proxied` are **IP literals**: a hostname there can't be
 resolved without DNS, which is the thing you're trying to fix.
 
+## Clients get no reply, but the box itself works
+
+The signature: `tcpdump` shows the client's SYNs arriving and nothing going
+back, the prerouting counters say the traffic was intercepted, and
+`input-intercepted` stays at zero.
+
+```bash
+sudo tcpdump -ni <wan-if> -c 20 host <client> and port 443   # In, never Out
+sudo gw diag <client>                                        # intercepted > 0, input-intercepted 0
+```
+
+Packets counted by the tproxy rule but never reaching the input chain are
+being dropped by the kernel in between — which happens when the tproxy target
+is a loopback address. `tproxy ip to 127.0.0.1:PORT` rewrites the destination,
+and a packet arriving on a real interface with a `127.0.0.0/8` destination is a
+martian, dropped during the route lookup.
+
+The box's own traffic is unaffected, because it is looped back through `lo`
+where that destination is legitimate — so the gateway works and every client
+fails.
+
+```bash
+nft list chain inet gateway prerouting | grep tproxy   # must be "to :PORT"
+```
+
+`tproxy ip to :PORT` keeps the original destination and changes only the port
+for the socket lookup. `tests/run.sh` fails if a loopback target reappears.
+
+To watch a specific client's packets move through the ruleset rule by rule:
+
+```bash
+sudo gw trace <client-ip>
+```
+
 ## A client has no internet with the box as its gateway
 
 Usually DNS. If the client still uses the router's resolver, blocked names

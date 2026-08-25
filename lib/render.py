@@ -78,7 +78,7 @@ def render_nft(cfg: Config) -> str:
         pre_default = (
             "        meta l4proto { tcp, udp } ip saddr $LAN {{DNS_EXCLUDE}}\\\n"
             "            meta mark set $MARK_TPROXY counter \\\n"
-            "            tproxy ip to 127.0.0.1:$TPROXY_PORT accept "
+            "            tproxy ip to :$TPROXY_PORT accept "
             'comment "lan-intercepted"\n'
         )
         # Same kill switch as for listed clients: if Xray is not listening the

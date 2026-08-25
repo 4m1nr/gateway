@@ -70,6 +70,16 @@ table inet gateway {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
 
+        # `tproxy ip to :PORT` keeps the packet's original destination and
+        # changes only the port for the socket lookup. Redirecting to
+        # 127.0.0.1 instead rewrites the destination to a loopback address,
+        # and a packet arriving on a real interface with a 127.0.0.0/8
+        # destination is a martian: the kernel drops it during the route
+        # lookup, after this rule's counter has already counted it. Traffic
+        # from the box itself survives that, because it is looped back through
+        # lo where 127.0.0.1 is legitimate — so the box works and every LAN
+        # client silently fails.
+
         # THE BOX'S OWN TRAFFIC ARRIVES HERE.
         #
         # The output chain marks it, and `ip route local default dev lo` in
@@ -80,7 +90,7 @@ table inet gateway {
         # silently disappears: the box gets no internet while LAN clients work
         # fine and the SOCKS health probe still reports the tunnel up.
         iif lo meta mark $MARK_TPROXY meta l4proto { tcp, udp } \
-            counter tproxy ip to 127.0.0.1:$TPROXY_PORT accept \
+            counter tproxy ip to :$TPROXY_PORT accept \
             comment "local-intercepted"
 
         # Anything else on loopback is genuinely local.
@@ -105,7 +115,7 @@ table inet gateway {
         # is proxied, which is what puts exit-node traffic in the tunnel)
         meta l4proto { tcp, udp } ip saddr @proxy_clients {{DNS_EXCLUDE}}\
             meta mark set $MARK_TPROXY counter \
-            tproxy ip to 127.0.0.1:$TPROXY_PORT accept comment "listed-intercepted"
+            tproxy ip to :$TPROXY_PORT accept comment "listed-intercepted"
 
         # Neither of these ever forwards traffic through us, but they are inside
         # $LAN and so would otherwise be caught by the catch-all below.

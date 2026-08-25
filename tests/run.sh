@@ -111,6 +111,17 @@ assert any(ipaddress.ip_address('10.10.34.34') in n for n in nets), 'misses 10.1
     else bad "$name: dnsintercept chain exists but tproxy still swallows port 53"; fi
   fi
 
+  # Redirecting to a loopback address makes every packet arriving on a real
+  # interface a martian, dropped by the kernel during the route lookup —
+  # after the rule's counter has already counted it. The box's own traffic
+  # still works (it is looped through lo), so this looks like "clients are
+  # broken" rather than "the tproxy target is wrong".
+  if grep -q 'tproxy ip to 127\.' "$nftf"; then
+    bad "$name: tproxy redirects to loopback — LAN clients will be dropped as martians"
+  elif grep -q 'tproxy ip to :' "$nftf"; then
+    ok "$name: tproxy keeps the original destination address"
+  else bad "$name: no tproxy rule found"; fi
+
   # A TPROXY-delivered packet is addressed to an external IP and delivered
   # locally, which conntrack is inclined to call invalid. Accepting on the mark
   # has to come first, or the client's SYNs die between the tproxy verdict and
