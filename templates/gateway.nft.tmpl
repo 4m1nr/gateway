@@ -160,12 +160,18 @@ table inet gateway {
     chain input {
         type filter hook input priority filter; policy drop;
 
-        iif lo accept
-        ct state established,related accept
-        ct state invalid drop
+        iif lo counter accept comment "input-loopback"
 
-        # TPROXY-delivered packets arrive here as "local" traffic
-        meta mark $MARK_TPROXY accept
+        # BEFORE the conntrack judgement, deliberately. A TPROXY-delivered
+        # packet is addressed to an external IP and delivered locally, which
+        # is exactly the shape conntrack is inclined to call invalid — and
+        # dropping it here means the client's SYNs vanish between the tproxy
+        # verdict and Xray's socket, with the prerouting counters happily
+        # showing them intercepted.
+        meta mark $MARK_TPROXY counter accept comment "input-intercepted"
+
+        ct state established,related counter accept comment "input-established"
+        ct state invalid counter drop comment "input-invalid"
 
         icmp type echo-request limit rate 5/second accept
         icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, \
@@ -177,7 +183,8 @@ table inet gateway {
         udp dport 41641 accept
 
         # DNS for the LAN (AdGuard Home)
-        ip saddr $LAN meta l4proto { tcp, udp } th dport {{DNS_PORT}} accept
+        ip saddr $LAN meta l4proto { tcp, udp } th dport {{DNS_PORT}} \
+            counter accept comment "input-dns"
 {{INPUT_SSH}}{{INPUT_UI}}{{INPUT_WEB}}
         counter comment "dropped-input"
     }

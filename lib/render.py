@@ -53,10 +53,12 @@ def render_nft(cfg: Config) -> str:
     tpl = (TPL / "gateway.nft.tmpl").read_text()
 
     if cfg.ipv6_mode == "off":
-        v6_pre = '        meta nfproto ipv6 iifname != "tailscale0" drop\n'
+        v6_pre = ('        meta nfproto ipv6 iifname != "tailscale0" '
+                  'counter drop comment "ipv6-dropped"\n')
         v6_out = '        meta nfproto ipv6 return\n'
         v6_fwd = ('        meta nfproto ipv6 iifname != "tailscale0" '
-                  'oifname != "tailscale0" drop\n')
+                  'oifname != "tailscale0" counter drop '
+                  'comment "ipv6-forward-dropped"\n')
     else:
         v6_pre = v6_out = v6_fwd = ""
 

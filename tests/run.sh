@@ -111,6 +111,32 @@ assert any(ipaddress.ip_address('10.10.34.34') in n for n in nets), 'misses 10.1
     else bad "$name: dnsintercept chain exists but tproxy still swallows port 53"; fi
   fi
 
+  # A TPROXY-delivered packet is addressed to an external IP and delivered
+  # locally, which conntrack is inclined to call invalid. Accepting on the mark
+  # has to come first, or the client's SYNs die between the tproxy verdict and
+  # Xray's socket while the prerouting counters show them intercepted.
+  inp=$(sed -n '/chain input {/,/^    }/p' "$nftf")
+  mark_at=$(printf '%s' "$inp" | grep -n 'input-intercepted' | head -1 | cut -d: -f1)
+  invalid_at=$(printf '%s' "$inp" | grep -n 'input-invalid' | head -1 | cut -d: -f1)
+  if [ -n "$mark_at" ] && [ -n "$invalid_at" ] && [ "$mark_at" -lt "$invalid_at" ]; then
+    ok "$name: input accepts intercepted packets before the conntrack check"
+  else
+    bad "$name: input drops ct-invalid before accepting intercepted packets"
+  fi
+
+  # Silent drops are how the last three bugs stayed hidden.
+  missing_counter=""
+  for want in input-intercepted prerouting-unmatched dropped-input; do
+    grep -q "$want" "$nftf" || missing_counter="$missing_counter $want"
+  done
+  # Only when v6 is actually being dropped; ipv6.mode = "pass" has no such rule.
+  if grep -q 'nfproto ipv6' "$nftf"; then
+    grep -q 'ipv6-dropped' "$nftf" || missing_counter="$missing_counter ipv6-dropped"
+  fi
+  if [ -z "$missing_counter" ]; then
+    ok "$name: every silent-drop path carries a named counter"
+  else bad "$name: uncounted drop path(s):$missing_counter"; fi
+
   # The loop guards are equally load-bearing: without them the box wedges the
   # moment interception is enabled.
   if grep -q 'meta mark \$MARK_XRAY return' "$nftf" && grep -q 'meta skuid "xray" return' "$nftf"; then

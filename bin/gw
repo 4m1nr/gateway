@@ -353,8 +353,7 @@ cmd_status() {
   elif nft list table inet gateway >/dev/null 2>&1; then
     printf 'firewall    loaded\n'
     local proxied drops
-    proxied=$(nft list set inet gateway proxy_clients 2>/dev/null \
-              | sed -n 's/.*elements = { \(.*\) }.*/\1/p')
+    proxied=$(gw_set_elements proxy_clients)
     # There are two killswitch rules (listed clients and the LAN catch-all), so
     # sum them — printf would otherwise reuse its format for the second value
     # and emit a stray line.
@@ -388,6 +387,34 @@ cmd_status() {
 cmd_check() { need_root check; "$REPO/scripts/90-verify.sh" "$@"; }
 
 # ------------------------------------------------------------------ diag ----
+# nft prints a set's elements across several lines once there are more than a
+# few, so a single-line sed silently reports an empty set. Join first.
+gw_set_elements() {
+  nft list set inet gateway "$1" 2>/dev/null \
+    | tr '\n' ' ' \
+    | sed -n 's/.*elements = {\([^}]*\)}.*/\1/p' \
+    | tr -s ' ' \
+    | sed 's/^ //; s/ $//'
+}
+
+# Print "name: N packets" for every counted rule in a chain, and "-" for the
+# ones that have not fired. An uncommented counter is reported by position so
+# it still shows up rather than being dropped from the report.
+gw_counters() {
+  nft list chain inet gateway "$1" 2>/dev/null \
+    | grep -E 'counter packets' \
+    | awk '{
+        pkts = ""; name = "";
+        for (i = 1; i <= NF; i++) if ($i == "packets") { pkts = $(i+1); break }
+        if (match($0, /comment "[^"]+"/)) {
+          name = substr($0, RSTART + 9, RLENGTH - 10)
+        } else {
+          name = "(rule " ++n ")"
+        }
+        printf "  %-24s %s\n", name ":", (pkts == "0" ? "-" : pkts " packets")
+      }'
+}
+
 # Answers "where does this client's traffic actually go?" from the counters,
 # rather than from reasoning about the ruleset. Every decision point in
 # prerouting is counted, so one of these numbers moving identifies the rule
@@ -400,15 +427,12 @@ cmd_diag() {
   if ! nft list table inet gateway >/dev/null 2>&1; then
     die "the gateway table is not loaded — run 'sudo gw apply'"
   fi
-  nft list chain inet gateway prerouting \
-    | grep -E 'counter packets' \
-    | sed -E 's/^\s+//; s/(.*)counter packets ([0-9]+) bytes ([0-9]+)(.*)comment "([^"]+)"/  \5: \2 packets, \3 bytes/' \
-    | sed -E 's/^  ([a-z-]+): 0 packets.*/  \1: -/'
+  gw_counters prerouting
+  printf '\n%s== input (where intercepted packets are delivered) ==%s\n' "$c_grn" "$c_off"
+  gw_counters input
+
   printf '\n%s== forward (traffic that was NOT intercepted) ==%s\n' "$c_grn" "$c_off"
-  nft list chain inet gateway forward \
-    | grep -E 'counter packets' \
-    | sed -E 's/^\s+//; s/(.*)counter packets ([0-9]+) bytes ([0-9]+)(.*)comment "([^"]+)"/  \5: \2 packets/' \
-    | sed -E 's/(.*)counter packets ([0-9]+).*/  (uncommented rule): \2 packets/'
+  gw_counters forward
 
   printf '\n%s== policy routing ==%s\n' "$c_grn" "$c_off"
   ip rule list | sed 's/^/  /'
@@ -417,9 +441,7 @@ cmd_diag() {
 
   printf '\n%s== interception sets ==%s\n' "$c_grn" "$c_off"
   for s in proxy_clients direct_clients blocked_clients; do
-    printf '  %-16s %s\n' "$s" \
-      "$(nft list set inet gateway "$s" 2>/dev/null \
-         | sed -n 's/.*elements = { \(.*\) }.*/\1/p')"
+    printf '  %-16s %s\n' "$s" "$(gw_set_elements "$s")"
   done
   printf '  %-16s %s\n' "default" "$(gw_env DEFAULT_POLICY)"
   printf '  %-16s %s\n' "lan_cidr" "$(gw_env LAN_CIDR)"
@@ -440,8 +462,12 @@ cmd_diag() {
     printf '  in direct_clients: %s\n' \
       "$(nft get element inet gateway direct_clients "{ $client }" >/dev/null 2>&1 \
          && echo yes || echo no)"
-    printf '  conntrack        : %s entries\n' \
-      "$(conntrack -L 2>/dev/null | grep -c "src=$client" || echo '? (install conntrack)')"
+    if command -v conntrack >/dev/null 2>&1; then
+      printf '  conntrack        : %s entries\n' \
+        "$(conntrack -L 2>/dev/null | grep -c "src=$client")"
+    else
+      printf '  conntrack        : (conntrack tool not installed)\n'
+    fi
     printf '  recent in xray   :\n'
     journalctl -u xray -n 200 --no-pager -o cat 2>/dev/null \
       | grep "$client" | tail -5 | sed 's/^/    /' \
