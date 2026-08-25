@@ -46,7 +46,8 @@ def env() -> dict:
             if line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
-            out[k] = v
+            # Values are shell-quoted so the file can be sourced safely.
+            out[k] = v.strip().strip('"')
     except OSError:
         pass
     return out

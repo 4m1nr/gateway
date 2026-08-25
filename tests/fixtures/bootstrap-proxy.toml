@@ -37,7 +37,7 @@ mode = "off"
 #  Override for a single command with:  gw --proxy socks5h://127.0.0.1:1080 ...
 # ============================================================================
 [bootstrap]
-socks_proxy = ""
+socks_proxy = "socks5h://127.0.0.1:1080"
 
 # ============================================================================
 #  Xray
@@ -65,7 +65,7 @@ outbound_mark   = 255
 #
 # `gw init` writes this file for you from a vless:// share link.
 [xray.outbound]
-file = "outbounds/reality.json"          # or: json = """ { ... } """
+file = "outbounds/main.json"          # or: json = """ { ... } """
 
 # Optional. Pins the server's address so the tunnel never needs DNS to come up
 # — otherwise that is a real boot-time chicken-and-egg. Leave empty for a
@@ -79,8 +79,9 @@ server_ip = ""
 # Optional second outbound. When enabled, Xray load-balances with a burst
 # observatory so a dead server fails over instead of taking you offline.
 [xray.fallback]
-enabled = true
-file    = "outbounds/backup.json"
+enabled = false
+# file      = "outbounds/backup.json"
+# server_ip = ""
 
 # ============================================================================
 #  Extra upstreams
@@ -172,8 +173,8 @@ file    = "outbounds/backup.json"
 [routing]
 direct_geosite = ["geosite:private", "geosite:category-ir"]
 direct_geoip   = ["geoip:private", "geoip:ir"]
-block_geosite  = ["geosite:category-ads-all"]          # e.g. ["geosite:category-ads-all"]
-block_bittorrent = true     # true = drop torrent traffic at the gateway
+block_geosite  = []          # e.g. ["geosite:category-ads-all"]
+block_bittorrent = false     # true = drop torrent traffic at the gateway
 
 # ============================================================================
 #  Geodata
@@ -184,7 +185,7 @@ block_bittorrent = true     # true = drop torrent traffic at the gateway
 #  since a truncated .dat takes the tunnel down.
 # ============================================================================
 [geodata]
-url_template = "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat"
+url_template = "https://mirror.example.com/v2ray/{0}.dat"
 files        = ["geoip", "geosite"]
 min_bytes    = 102400
 

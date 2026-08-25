@@ -8,12 +8,17 @@ need_root
 
 info "installing packages"
 export DEBIAN_FRONTEND=noninteractive
+# This box has no tunnel yet. If it also has no usable direct route, set
+# bootstrap.socks_proxy in gateway.toml (or pass `gw --proxy ...`).
+apt_proxy_on
 apt-get update -qq
 apt-get install -y --no-install-recommends \
   nftables iproute2 curl ca-certificates unzip jq \
   chrony python3 python3-yaml openssl sudo \
   ethtool tcpdump dnsutils mtr-tiny vnstat \
   zram-tools unattended-upgrades
+
+apt_proxy_off
 
 TZ=$(sed -n 's/^timezone *= *"\(.*\)"/\1/p' "$CONFIG" | head -1)
 if [ -n "$TZ" ]; then

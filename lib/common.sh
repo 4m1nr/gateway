@@ -17,6 +17,40 @@ confirm() {
   [[ "$reply" =~ ^[Yy]$ ]] || die "aborted"
 }
 
+# ---------------------------------------------------------------- proxy ----
+# Setup runs before the tunnel exists, so these jobs may need a way out that
+# the gateway itself cannot yet provide. GW_PROXY (env, or `gw --proxy`)
+# overrides bootstrap.socks_proxy from the config.
+#
+# None of this applies once the gateway is running: the box's own traffic is
+# routed through Xray by the OUTPUT chain.
+gw_proxy() {
+  if [ -n "${GW_PROXY:-}" ]; then printf '%s' "$GW_PROXY"; return; fi
+  sed -n 's/^socks_proxy *= *"\(.*\)"/\1/p' \
+    <(sed -n '/^\[bootstrap\]/,/^\[/p' "$CONFIG") | head -1
+}
+
+gw_curl() {
+  local proxy; proxy=$(gw_proxy)
+  if [ -n "$proxy" ]; then curl -fsSL --proxy "$proxy" "$@"; else curl -fsSL "$@"; fi
+}
+
+APT_PROXY_CONF=/etc/apt/apt.conf.d/99-gw-bootstrap-proxy
+apt_proxy_on() {
+  local proxy; proxy=$(gw_proxy)
+  [ -z "$proxy" ] && return 0
+  info "routing apt through the bootstrap proxy: $proxy"
+  cat > "$APT_PROXY_CONF" <<CONF
+// Written by the gateway setup scripts for this run only.
+Acquire::http::Proxy "$proxy";
+Acquire::https::Proxy "$proxy";
+CONF
+  # Removed even if the script dies, so apt is never left pointing at a proxy
+  # that has gone away.
+  trap 'rm -f "$APT_PROXY_CONF"' EXIT
+}
+apt_proxy_off() { rm -f "$APT_PROXY_CONF"; }
+
 # version_of <component> — read a pin out of versions.toml without a TOML parser
 version_of() {
   sed -n "/^\[$1\]/,/^\[/p" "$REPO/versions.toml" \
@@ -38,7 +72,7 @@ verify_sha() {
     info "checksum verified against the pin in versions.toml"
     return 0
   fi
-  if [ -n "$dgst_url" ] && curl -fsSL --max-time 30 "$dgst_url" -o "$file.dgst" 2>/dev/null; then
+  if [ -n "$dgst_url" ] && gw_curl --max-time 30 "$dgst_url" -o "$file.dgst" 2>/dev/null; then
     if grep -qi "$actual" "$file.dgst"; then
       info "checksum matches the published digest"
       warn "that digest came from the same host as the download — it proves the file is intact, not that it is authentic. Pin sha256 in versions.toml to fix that."

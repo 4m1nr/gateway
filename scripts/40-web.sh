@@ -20,7 +20,7 @@ fi
 "$REPO/bin/gw" render >/dev/null
 PORT=$(sed -n 's/.*"port": *\([0-9]*\).*/\1/p' "$REPO/build/etc/gateway/web.json")
 TLS=$(grep -q '"tls": *true' "$REPO/build/etc/gateway/web.json" && echo yes || echo no)
-BOX=$(sed -n 's/^BOX_IP=//p' "$REPO/build/usr/local/lib/gateway/env")
+BOX=$( . "$REPO/build/usr/local/lib/gateway/env"; printf '%s' "$BOX_IP" )
 
 install -d -m 0755 /etc/gateway
 

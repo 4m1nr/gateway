@@ -124,7 +124,7 @@ See `docs/per-client-policy.md`.
 | `gw check --killswitch` | also prove traffic dies rather than leaking |
 | `gw client` | `list` / `add <ip> <name> <policy>` / `rm <ip>` |
 | `gw web-passwd` | set the dashboard password |
-| `gw update` | binaries, geodata, blocklists, then re-apply |
+| `gw update` | `all` \| `xray [ver]` \| `geo` \| `packages` \| `--check` |
 | `gw panic` | drop to plain NAT so the LAN works while you debug |
 | `gw logs` | follow every relevant journal at once |
 
@@ -168,6 +168,98 @@ that matters, reach the dashboard over Tailscale instead.
 `http.server` is not a hardened internet-facing server, and this is not exposed
 to the internet. Keep it that way: don't port-forward it, and don't widen
 `allow_cidrs` to `0.0.0.0/0` (the loader refuses that anyway).
+
+## Updating
+
+```bash
+sudo gw update --check          # installed vs pinned vs latest, changes nothing
+sudo gw update xray             # newest release
+sudo gw update xray v25.9.11    # a specific version
+sudo gw update geo              # geodata only
+sudo gw update                  # everything, then re-apply
+```
+
+An Xray update that breaks the tunnel takes the whole LAN offline, so the
+updater refuses to be that failure:
+
+1. downloads and verifies (a `sha256` pin in `versions.toml` if you set one,
+   otherwise the published digest — which proves integrity, not authenticity)
+2. runs the **new** binary against the **live** config with `-test`, and
+   aborts without touching `/usr/local/bin` if it is rejected
+3. keeps the old binary at `xray.previous` and rolls back to it if the service
+   fails to start or does not stay up
+
+The same script does the first install, so there is one code path to trust.
+
+Geodata comes from a configurable source, defaulting to the Iran rule set:
+
+```toml
+[geodata]
+url_template = "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat"
+files        = ["geoip", "geosite"]
+```
+
+`{0}` is replaced with each file name. Downloads are size-checked and tested
+before they replace the current files, because a truncated `.dat` takes the
+tunnel down and this runs unattended from a weekly timer.
+
+## Bootstrap proxy
+
+Setup happens before the tunnel exists, so a box that cannot reach the internet
+directly has a chicken-and-egg problem: it needs the internet to install the
+thing that gives it the internet.
+
+```toml
+[bootstrap]
+socks_proxy = "socks5h://127.0.0.1:1080"
+```
+
+```bash
+sudo gw --proxy socks5h://127.0.0.1:1080 update xray    # one-off override
+```
+
+Every download the setup and update paths make goes through one helper, so this
+single setting covers Xray, AdGuard, geodata and apt. Prefer `socks5h://` so
+DNS is resolved at the proxy rather than locally.
+
+It applies **only** before the gateway works. Once it is running, the box's own
+traffic is already routed through Xray by the OUTPUT chain, and this should be
+left empty. The apt proxy in particular is written and removed around the
+commands that need it, rather than left in `/etc/apt/apt.conf.d` where it would
+break apt the day the bootstrap proxy goes away.
+
+## Custom routing
+
+Extra Xray routing rules spliced into the generated pipeline. A TOML table maps
+one-to-one onto Xray's rule JSON, so the table *is* the rule — `position` is the
+only key the gateway consumes:
+
+```toml
+[[route]]                          # nothing reaches this host on SSH, ever
+position    = "first"
+ip          = ["203.0.113.5/32"]
+port        = "22"
+outboundTag = "block"
+
+[[route]]                          # force an intranet name direct
+domain      = ["domain:intranet.example.com"]
+outboundTag = "direct"
+
+[[route]]                          # a whole network via the work upstream
+ip          = ["198.51.100.0/24"]
+outboundTag = "work"
+```
+
+| `position` | lands |
+|---|---|
+| `first` | ahead of everything, including per-client policy — where a hard block belongs |
+| `before` (default) | after per-client policy, ahead of the geo split, so it beats "all `.ir` goes direct" |
+| `after` | after the geo split, before the fallthrough defaults |
+
+`outboundTag` accepts an `[[upstream]]` name as well as `proxy`/`direct`/`block`.
+A `json = """..."""` key takes a raw rule for anything the TOML form cannot
+express. `tests/check_custom_routes.py` asserts each rule lands where it asked
+to — misplacement produces no error, just a rule that quietly stops applying.
 
 ## Starting on boot
 

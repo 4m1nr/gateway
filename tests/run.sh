@@ -155,6 +155,43 @@ sys.exit(1 if bad else 0)"; then
     else bad "$name: a profile route names an outbound that does not exist"; fi
   fi
 
+  # ---- custom routes ----
+  nroutes=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print(len(gwconfig.load('$f').routes))")
+  if [ "$nroutes" -gt 0 ]; then
+    if out=$(python3 tests/check_custom_routes.py "$f" \
+             "$OUT/$name/usr/local/etc/xray/config.json" 2>&1); then
+      ok "$name: ${out#ok: }"
+    else bad "$name: $out"; fi
+  fi
+
+  # ---- geodata + bootstrap proxy reach the scripts ----
+  envf="$OUT/$name/usr/local/lib/gateway/env"
+  geo=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print(gwconfig.load('$f').geo_url)")
+  prox=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print(gwconfig.load('$f').bootstrap_proxy)")
+  # Source it, the way the helpers do — that also proves the file is
+  # shell-safe, which an unquoted value with a space would not be.
+  if envout=$( . "$envf" 2>/dev/null && printf '%s|%s|%s' \
+                 "$GEO_URL_TEMPLATE" "$BOOTSTRAP_PROXY" "$GEO_FILES" ); then
+    if [ "${envout%%|*}" = "$geo" ]; then
+      ok "$name: geodata source reaches the update script"
+    else bad "$name: GEO_URL_TEMPLATE is '${envout%%|*}', expected '$geo'"; fi
+    rest="${envout#*|}"
+    if [ "${rest%%|*}" = "$prox" ]; then
+      ok "$name: bootstrap proxy setting reaches the scripts"
+    else bad "$name: BOOTSTRAP_PROXY is '${rest%%|*}', expected '$prox'"; fi
+    if [ "${envout##*|}" = "geoip geosite" ]; then
+      ok "$name: env survives being sourced with a multi-word value"
+    else bad "$name: GEO_FILES came back as '${envout##*|}'"; fi
+  else
+    bad "$name: the env file could not be sourced — a value is not shell-safe"
+  fi
+
   # ---- web dashboard ----
   web=$(python3 -c "
 import sys;sys.path.insert(0,'lib');import gwconfig

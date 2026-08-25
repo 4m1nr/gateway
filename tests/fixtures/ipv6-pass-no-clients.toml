@@ -26,6 +26,20 @@ prefix_len = 24
 mode = "pass"
 
 # ============================================================================
+#  Bootstrap proxy
+#
+#  Only for jobs that need the internet BEFORE the tunnel exists: installing
+#  Xray, fetching geodata, apt. Once the gateway is running its own traffic is
+#  already routed through Xray, and this is unused — leave it empty unless
+#  first-time setup on this box cannot reach the internet directly.
+#
+#  Prefer socks5h:// so DNS is resolved at the proxy rather than locally.
+#  Override for a single command with:  gw --proxy socks5h://127.0.0.1:1080 ...
+# ============================================================================
+[bootstrap]
+socks_proxy = ""
+
+# ============================================================================
 #  Xray
 # ============================================================================
 [xray]
@@ -115,6 +129,45 @@ enabled = false
 #   domains = ["geosite:category-ads-all"]
 
 # ============================================================================
+#  Custom routing
+#
+#  Extra Xray routing rules spliced into the generated pipeline. A TOML table
+#  maps one-to-one onto Xray's rule JSON, so the table *is* the rule —
+#  `position` is the only key the gateway consumes.
+#
+#  position = "first"   ahead of everything, including per-client policy.
+#                       Where a hard block belongs.
+#             "before"  (default) after per-client policy, before the global
+#                       geo split — so it beats "all .ir goes direct".
+#             "after"   after the geo split, before the fallthrough defaults.
+#
+#  outboundTag accepts an [[upstream]] name as well as proxy / direct / block.
+# ============================================================================
+
+# Nothing reaches this host on SSH, from any device:
+# [[route]]
+# position    = "first"
+# ip          = ["203.0.113.5/32"]
+# port        = "22"
+# outboundTag = "block"
+
+# Force an intranet name direct even though it would otherwise be tunnelled:
+# [[route]]
+# domain      = ["domain:intranet.example.com"]
+# outboundTag = "direct"
+
+# Send a whole network through the work upstream, for every device:
+# [[route]]
+# ip          = ["198.51.100.0/24"]
+# outboundTag = "work"
+
+# Escape hatch for anything the TOML form cannot express:
+# [[route]]
+# json = """
+# { "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" }
+# """
+
+# ============================================================================
 #  Split routing — what goes direct vs through the tunnel
 # ============================================================================
 [routing]
@@ -122,6 +175,19 @@ direct_geosite = ["geosite:private", "geosite:category-ir"]
 direct_geoip   = ["geoip:private", "geoip:ir"]
 block_geosite  = []          # e.g. ["geosite:category-ads-all"]
 block_bittorrent = false     # true = drop torrent traffic at the gateway
+
+# ============================================================================
+#  Geodata
+#
+#  Where geoip.dat / geosite.dat come from. {0} is replaced with each file
+#  name. Refreshed weekly by gw-geoupdate.timer, and on demand with
+#  `gw update geo`; downloads are validated before they replace the old files,
+#  since a truncated .dat takes the tunnel down.
+# ============================================================================
+[geodata]
+url_template = "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat"
+files        = ["geoip", "geosite"]
+min_bytes    = 102400
 
 # ============================================================================
 #  DNS

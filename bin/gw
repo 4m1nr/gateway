@@ -12,7 +12,7 @@
 #   gw check         end-to-end verification, including leak tests
 #   gw client        add/remove/list per-client policy
 #   gw web-passwd    set the dashboard password
-#   gw update        binaries, geodata, blocklists
+#   gw update        all | xray [ver] | geo | packages | --check
 #   gw panic         disable interception, plain NAT, keep the LAN online
 #   gw logs          follow the relevant journals
 set -euo pipefail
@@ -35,6 +35,13 @@ info() { printf '%s==>%s %s\n' "$c_grn" "$c_off" "$*"; }
 warn() { printf '%s[!]%s %s\n' "$c_yel" "$c_off" "$*" >&2; }
 die()  { printf '%s[x]%s %s\n' "$c_red" "$c_off" "$*" >&2; exit 1; }
 need_root() { [ "$(id -u)" -eq 0 ] || die "$1 needs root (try: sudo gw $1)"; }
+
+# Read one value from the rendered env. Sourced in a subshell rather than
+# grepped, so quoting is handled by the shell that wrote it.
+gw_env() {
+  [ -f /usr/local/lib/gateway/env ] || return 0
+  ( . /usr/local/lib/gateway/env; eval "printf '%s' \"\${$1:-}\"" )
+}
 
 # ---------------------------------------------------------------- render ----
 cmd_render() {
@@ -256,12 +263,12 @@ cmd_status() {
     drops=$(nft list chain inet gateway forward 2>/dev/null \
             | grep killswitch | grep -oE 'packets [0-9]+' | grep -oE '[0-9]+')
     local defpol
-    defpol=$(sed -n 's/^DEFAULT_POLICY=//p' /usr/local/lib/gateway/env 2>/dev/null)
+    defpol=$(gw_env DEFAULT_POLICY)
     printf '%s  default         : %s (any device whose gateway is this box)%s\n' \
       "$c_dim" "${defpol:-?}" "$c_off"
     printf '%s  intercepted     : %s%s\n' "$c_dim" "${proxied:-none}" "$c_off"
     local profs
-    profs=$(sed -n 's/^PROFILES=//p' /usr/local/lib/gateway/env 2>/dev/null)
+    profs=$(gw_env PROFILES)
     [ -n "$profs" ] && printf '%s  profiles        : %s%s\n' "$c_dim" "$profs" "$c_off"
     printf '%s  killswitch drops: %s%s\n' "$c_dim" "${drops:-0}" "$c_off"
   else
@@ -272,7 +279,7 @@ cmd_status() {
     local wport wscheme
     wport=$(sed -n 's/.*"port": *\([0-9]*\).*/\1/p' /etc/gateway/web.json)
     wscheme=http; grep -q '"tls": *true' /etc/gateway/web.json && wscheme=https
-    printf 'dashboard   %s://%s:%s\n' "$wscheme" "$(sed -n 's/^BOX_IP=//p' /usr/local/lib/gateway/env)" "$wport"
+    printf 'dashboard   %s://%s:%s\n' "$wscheme" "$(gw_env BOX_IP)" "$wport"
   fi
 
   command -v tailscale >/dev/null && tailscale status --peers=false 2>/dev/null | head -3 || true
@@ -296,13 +303,62 @@ cmd_init() { $PY "$REPO/lib/init.py" "$REPO" "$CONFIG" "$@"; }
 # ---------------------------------------------------------------- update ----
 cmd_update() {
   need_root update
-  info "updating geodata"
-  /usr/local/lib/gateway/geoupdate.sh || warn "geodata update failed"
-  info "updating packages"
-  apt-get update -qq && apt-get -y upgrade
-  info "re-applying config"
-  cmd_apply
+  local what="${1:-all}"
+  shift || true
+
+  case "$what" in
+    --check|check)
+      /usr/local/lib/gateway/xray-update.sh --check
+      return $?
+      ;;
+    xray)
+      # Tests the new binary against the live config and rolls back if the
+      # service does not come up.
+      /usr/local/lib/gateway/xray-update.sh "${1:-latest}"
+      ;;
+    geo|geodata)
+      /usr/local/lib/gateway/geoupdate.sh
+      ;;
+    packages|apt)
+      apt_proxy_on
+      apt-get update -qq && apt-get -y upgrade
+      apt_proxy_off
+      ;;
+    all)
+      info "checking Xray"
+      /usr/local/lib/gateway/xray-update.sh --check || true
+      info "updating geodata"
+      /usr/local/lib/gateway/geoupdate.sh || warn "geodata update failed"
+      info "updating packages"
+      apt_proxy_on
+      apt-get update -qq && apt-get -y upgrade
+      apt_proxy_off
+      info "re-applying config"
+      cmd_apply
+      ;;
+    *)
+      die "unknown update target: $what (try: all | xray [version] | geo | packages | --check)"
+      ;;
+  esac
 }
+
+# Only relevant before the tunnel exists. apt has no SOCKS support of its own
+# beyond this setting, and leaving it configured permanently would break apt
+# the day the bootstrap proxy goes away — so it is written and removed around
+# the commands that need it.
+APT_PROXY_CONF=/etc/apt/apt.conf.d/99-gw-bootstrap-proxy
+apt_proxy_on() {
+  local proxy="${GW_PROXY:-}"
+  [ -z "$proxy" ] && proxy=$(gw_env BOOTSTRAP_PROXY)
+  [ -z "$proxy" ] && return 0
+  info "using the bootstrap proxy for apt: $proxy"
+  cat > "$APT_PROXY_CONF" <<CONF
+// Written by \`gw\` for this command only; removed when it finishes.
+Acquire::http::Proxy "$proxy";
+Acquire::https::Proxy "$proxy";
+CONF
+}
+apt_proxy_off() { rm -f "$APT_PROXY_CONF"; }
 
 # ----------------------------------------------------------------- panic ----
 cmd_panic() {
@@ -329,6 +385,13 @@ NFT
 cmd_logs() { journalctl -fu xray -u gw-network -u gw-health -u AdGuardHome -t gw-health "$@"; }
 
 usage() { awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "${BASH_SOURCE[0]}"; }
+
+# --proxy applies to every download this run makes; it overrides
+# bootstrap.socks_proxy from the config.
+if [ "${1:-}" = "--proxy" ]; then
+  export GW_PROXY="${2:?--proxy needs a URL, e.g. socks5h://127.0.0.1:1080}"
+  shift 2
+fi
 
 case "${1:-}" in
   render) shift; cmd_render "$@" ;;

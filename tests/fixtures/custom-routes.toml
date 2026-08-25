@@ -65,7 +65,7 @@ outbound_mark   = 255
 #
 # `gw init` writes this file for you from a vless:// share link.
 [xray.outbound]
-file = "outbounds/reality.json"          # or: json = """ { ... } """
+file = "outbounds/main.json"          # or: json = """ { ... } """
 
 # Optional. Pins the server's address so the tunnel never needs DNS to come up
 # — otherwise that is a real boot-time chicken-and-egg. Leave empty for a
@@ -79,8 +79,9 @@ server_ip = ""
 # Optional second outbound. When enabled, Xray load-balances with a burst
 # observatory so a dead server fails over instead of taking you offline.
 [xray.fallback]
-enabled = true
-file    = "outbounds/backup.json"
+enabled = false
+# file      = "outbounds/backup.json"
+# server_ip = ""
 
 # ============================================================================
 #  Extra upstreams
@@ -172,8 +173,8 @@ file    = "outbounds/backup.json"
 [routing]
 direct_geosite = ["geosite:private", "geosite:category-ir"]
 direct_geoip   = ["geoip:private", "geoip:ir"]
-block_geosite  = ["geosite:category-ads-all"]          # e.g. ["geosite:category-ads-all"]
-block_bittorrent = true     # true = drop torrent traffic at the gateway
+block_geosite  = []          # e.g. ["geosite:category-ads-all"]
+block_bittorrent = false     # true = drop torrent traffic at the gateway
 
 # ============================================================================
 #  Geodata
@@ -327,3 +328,68 @@ unattended_upgrades = true
 # SSH stays reachable from these sources only.
 ssh_allow_lan    = true
 ssh_allow_tailnet = true
+
+[[upstream]]
+name = "work"
+file = "outbounds/work.json"
+
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+
+  [[profile.route]]
+  via     = "work"
+  domains = ["domain:corp.work-example.com"]
+  ips     = ["10.20.0.0/16", "203.0.113.0/24"]
+
+  [[profile.route]]
+  via     = "block"
+  domains = ["geosite:category-ads-all"]
+
+[[profile]]
+name = "mostly-local"
+base = "direct"
+
+  [[profile.route]]
+  via = "work"
+  ips = ["10.20.0.0/16"]
+
+  [[profile.route]]
+  via     = "proxy"
+  domains = ["domain:news.example.com"]
+
+[[client]]
+ip     = "192.168.1.70"
+name   = "work-laptop"
+policy = "work-laptop"
+
+[[client]]
+ip     = "192.168.1.71"
+name   = "desktop"
+policy = "mostly-local"
+
+[[route]]
+position    = "first"
+ip          = ["203.0.113.5/32"]
+port        = "22"
+outboundTag = "block"
+
+[[route]]
+domain      = ["domain:intranet.example.com"]
+outboundTag = "direct"
+
+[[route]]
+ip          = ["198.51.100.0/24"]
+outboundTag = "work"
+
+[[route]]
+position    = "after"
+port        = "5353"
+network     = "udp"
+outboundTag = "direct"
+
+[[route]]
+position = "first"
+json     = """
+{ "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" }
+"""

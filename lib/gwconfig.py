@@ -132,6 +132,36 @@ class Config:
         self.block_geosite = rt.get("block_geosite", [])
         self.block_bittorrent = bool(rt.get("block_bittorrent", False))
 
+        # ---- geodata --------------------------------------------------------
+        geo = raw.get("geodata", {})
+        self.geo_url = geo.get(
+            "url_template",
+            "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat",
+        )
+        if "{0}" not in self.geo_url:
+            raise ConfigError(
+                "geodata.url_template must contain {0}, which is replaced with "
+                "each file name (geoip, geosite)"
+            )
+        self.geo_files = geo.get("files", ["geoip", "geosite"])
+        # A truncated .dat takes the tunnel down, and this runs unattended.
+        self.geo_min_bytes = int(geo.get("min_bytes", 102400))
+
+        # ---- bootstrap proxy ------------------------------------------------
+        # Only for jobs that need the internet BEFORE the tunnel exists:
+        # installing Xray, fetching geodata, apt. Once the gateway is running
+        # its own traffic is already proxied and this is unused.
+        boot = raw.get("bootstrap", {})
+        self.bootstrap_proxy = str(boot.get("socks_proxy", "")).strip()
+        if self.bootstrap_proxy:
+            ok = ("socks5://", "socks5h://", "socks4://", "http://", "https://")
+            if not self.bootstrap_proxy.startswith(ok):
+                raise ConfigError(
+                    f"bootstrap.socks_proxy {self.bootstrap_proxy!r} needs a scheme, "
+                    f"one of: {', '.join(ok)}. Prefer socks5h:// so DNS is resolved "
+                    "at the proxy rather than locally."
+                )
+
         # ---- dns ------------------------------------------------------------
         dns = raw.get("dns", {})
         self.dns_port = int(dns.get("adguard_port", 53))
@@ -242,6 +272,56 @@ class Config:
                     f"policy = {base!r}. Use the built-in policy instead."
                 )
             self.profiles[name] = {"base": base, "routes": routes}
+
+        # ---- custom routing -------------------------------------------------
+        # Raw Xray routing rules spliced into the generated pipeline. A TOML
+        # table maps one-to-one onto Xray's rule JSON, so the table *is* the
+        # rule; `position` is the only key the gateway consumes.
+        self.routes: list[dict] = []
+        matchers = ("domain", "ip", "port", "sourcePort", "network", "source",
+                    "user", "inboundTag", "protocol", "attrs")
+        for i, r in enumerate(raw.get("route", [])):
+            where = f"route[{i}]"
+            if not isinstance(r, dict):
+                raise ConfigError(f"{where} must be a table")
+            position = r.get("position", "before")
+            if position not in ("first", "before", "after"):
+                raise ConfigError(
+                    f"{where}.position must be 'first' (before every other rule), "
+                    "'before' (before the geo split, the default) or 'after' "
+                    "(after the geo split)"
+                )
+            if "json" in r:
+                try:
+                    rule = json.loads(r["json"])
+                except ValueError as e:
+                    raise ConfigError(f"{where}.json: not valid JSON — {e}")
+                if not isinstance(rule, dict):
+                    raise ConfigError(f"{where}.json must be a single rule object")
+            else:
+                rule = {k: v for k, v in r.items() if k != "position"}
+
+            rule.setdefault("type", "field")
+            target = rule.get("outboundTag")
+            if "balancerTag" not in rule:
+                if not target:
+                    raise ConfigError(
+                        f"{where} has no outboundTag — say where the matched "
+                        f"traffic should go (one of: {', '.join(sorted(self.route_targets))})"
+                    )
+                if target in self.route_targets:
+                    rule["outboundTag"] = self.route_targets[target]
+                elif target not in self.route_targets.values():
+                    raise ConfigError(
+                        f"{where}.outboundTag {target!r} is not a known target. "
+                        f"Expected one of: {', '.join(sorted(self.route_targets))}"
+                    )
+            if not any(k in rule for k in matchers):
+                raise ConfigError(
+                    f"{where} matches nothing — add at least one of: "
+                    f"{', '.join(matchers)}"
+                )
+            self.routes.append({"position": position, "rule": rule})
 
         self.policies = tuple(BUILTIN_POLICIES) + tuple(self.profiles)
         # Every profile needs its traffic in front of Xray to be split at all.

@@ -38,8 +38,7 @@ else
   info "AdGuard Home already installed"
 fi
 
-UI_PORT=$(sed -n 's/^UI_PORT=//p' /usr/local/lib/gateway/env)
-BOX=$(sed -n 's/^BOX_IP=//p' /usr/local/lib/gateway/env)
+eval "$( . /usr/local/lib/gateway/env; printf 'UI_PORT=%s\nBOX=%s\n' "$UI_PORT" "$BOX_IP" )"
 
 if [ ! -f /opt/AdGuardHome/AdGuardHome.yaml ]; then
   cat <<NEXT

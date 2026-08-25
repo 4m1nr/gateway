@@ -148,11 +148,19 @@ def _outbounds(cfg: Config) -> list:
 
 
 def _routing(cfg: Config) -> dict:
+    def custom(position: str) -> list:
+        return [r["rule"] for r in cfg.routes if r["position"] == position]
+
     # Must come first: API traffic has to reach the API handler before any
     # other rule can claim it.
     rules: list = [
         {"type": "field", "inboundTag": ["api"], "outboundTag": "api"}
     ]
+
+    # position = "first": ahead of even the per-client policy rules. This is
+    # where a hard block belongs — "never let anything reach this ip:port",
+    # regardless of which device asked.
+    rules += custom("first")
 
     if cfg.block_geosite:
         rules.append(
@@ -195,12 +203,20 @@ def _routing(cfg: Config) -> dict:
                     "ip": route["ips"], "outboundTag": route["tag"],
                 })
 
+    # position = "before" (the default): after per-client policy, ahead of the
+    # global geo split — so a custom rule wins over "all .ir goes direct".
+    rules += custom("before")
+
     if cfg.direct_geosite:
         rules.append(
             {"type": "field", "domain": cfg.direct_geosite, "outboundTag": "direct"}
         )
     if cfg.direct_geoip:
         rules.append({"type": "field", "ip": cfg.direct_geoip, "outboundTag": "direct"})
+
+    # position = "after": the geo split has already had its say; this catches
+    # what it did not claim, before any of the fallthrough defaults.
+    rules += custom("after")
 
     # Then each profile's fallthrough. After the geo rules, so a profile client
     # still gets the domestic-direct split for everything its own rules did not

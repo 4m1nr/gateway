@@ -117,6 +117,36 @@ interception *and* no kill switch. `journalctl -b -u gw-network` shows the nft
 error; it is almost always a ruleset referring to something that doesn't exist
 yet, such as the `xray` user.
 
+## Downloads fail during setup
+
+The box has no tunnel yet. If it also has no usable direct route, point the
+setup jobs at a proxy:
+
+```toml
+[bootstrap]
+socks_proxy = "socks5h://127.0.0.1:1080"
+```
+
+or `sudo gw --proxy socks5h://127.0.0.1:1080 update xray` for one command. This
+covers Xray, AdGuard, geodata and apt. Clear it once the gateway works — the
+box proxies its own traffic from then on.
+
+## An Xray update went wrong
+
+It shouldn't leave you stranded: the new binary is tested against the live
+config before it is installed, and the old one is kept.
+
+```bash
+sudo gw update --check                       # what is installed vs available
+ls -la /usr/local/bin/xray.previous          # the version you were on
+sudo install -m755 /usr/local/bin/xray.previous /usr/local/bin/xray
+sudo systemctl restart xray
+```
+
+"Xray vX rejects the current config" means a breaking change between versions,
+not a gateway bug — the outbound JSON is passed through untouched. Check that
+release's notes, adjust `outbounds/*.json`, then retry.
+
 ## The dashboard
 
 **"Your address is not permitted" (403).** You are outside `web.allow_cidrs`.
