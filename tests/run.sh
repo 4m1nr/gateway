@@ -185,11 +185,34 @@ print(gwconfig.load('$f').bootstrap_proxy)")
     if [ "${rest%%|*}" = "$prox" ]; then
       ok "$name: bootstrap proxy setting reaches the scripts"
     else bad "$name: BOOTSTRAP_PROXY is '${rest%%|*}', expected '$prox'"; fi
-    if [ "${envout##*|}" = "geoip geosite" ]; then
-      ok "$name: env survives being sourced with a multi-word value"
-    else bad "$name: GEO_FILES came back as '${envout##*|}'"; fi
+    want_files=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print(' '.join(gwconfig.load('$f').geo_files))")
+    if [ "${envout##*|}" = "$want_files" ]; then
+      ok "$name: env round-trips through a shell source"
+    else bad "$name: GEO_FILES came back as '${envout##*|}', expected '$want_files'"; fi
   else
     bad "$name: the env file could not be sourced — a value is not shell-safe"
+  fi
+
+  # ---- scheduled jobs ----
+  njobs=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print(len(gwconfig.load('$f').jobs))")
+  if [ "$njobs" -gt 0 ]; then
+    cron="$OUT/$name/etc/cron.d/gw-jobs"
+    # A crontab line containing % is silently truncated by cron at that point,
+    # so script bodies must live in their own files. This is the whole reason
+    # the crontab only ever names a script.
+    if grep -vE '^\s*#' "$cron" | grep -q '%'; then
+      bad "$name: a % reached the crontab — cron would truncate that line"
+    else ok "$name: no % in the crontab (script bodies are in their own files)"; fi
+
+    if python3 tests/check_jobs.py "$f" "$OUT/$name" >/dev/null 2>&1; then
+      ok "$name: every enabled job has a crontab line and a script"
+    else
+      bad "$name: $(python3 tests/check_jobs.py "$f" "$OUT/$name" 2>&1 | head -1)"
+    fi
   fi
 
   # ---- web dashboard ----
@@ -266,6 +289,24 @@ for f in tests/invalid/*.toml; do
     ok "$name: rejected ($(python3 lib/render.py "$f" "$OUT/bad-$name" 2>&1 | head -1 | cut -c1-70))"
   fi
 done
+
+echo
+echo "== fixtures are generated, not hand-maintained =="
+# A fixture that no longer matches the example silently stops exercising what
+# it was written for: a .replace() that misses leaves the default in place and
+# the test still passes.
+if command -v git >/dev/null && git rev-parse --git-dir >/dev/null 2>&1; then
+  before=$(git status --porcelain -- tests/fixtures | wc -l)
+  python3 tests/make_fixtures.py >/dev/null 2>&1 || bad "make_fixtures.py failed"
+  after=$(git status --porcelain -- tests/fixtures | wc -l)
+  if [ "$before" -eq "$after" ]; then
+    ok "regenerating fixtures is a no-op"
+  else
+    bad "tests/fixtures is stale — run 'python3 tests/make_fixtures.py' and commit"
+  fi
+else
+  printf '  – not a git checkout, skipping the fixture freshness check\n'
+fi
 
 echo
 echo "== committed templates =="

@@ -149,9 +149,58 @@ async function guard(fn) {
   catch (e) { text(err, e.message); show(err, true); }
 }
 
+function renderJobs(data) {
+  const body = $("jobs").querySelector("tbody");
+  const jobs = data.jobs || [];
+  if (!jobs.length) {
+    body.innerHTML = `<tr><td colspan="5" class="muted">no scheduled jobs</td></tr>`;
+    return;
+  }
+  body.innerHTML = jobs.map((j) => `
+    <tr>
+      <td>${escapeHtml(j.name)}${j.managed ? "" : ' <span class="muted small">(hand-written)</span>'}</td>
+      <td class="sched">${escapeHtml(j.schedule)}</td>
+      <td>${escapeHtml(j.user || "root")}</td>
+      <td><span class="badge ${j.enabled ? "ok" : "bad"}">${j.enabled ? "enabled" : "paused"}</span></td>
+      <td>
+        <div class="job-actions">
+          ${j.managed ? `
+            <button class="secondary" data-toggle="${escapeHtml(j.name)}"
+                    data-enable="${j.enabled ? "0" : "1"}">${j.enabled ? "Pause" : "Resume"}</button>
+            <button class="danger" data-jobrm="${escapeHtml(j.name)}">Remove</button>` : ""}
+        </div>
+      </td>
+    </tr>`).join("");
+
+  body.querySelectorAll("[data-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => guard(async () => {
+      const r = await api("/api/jobs/toggle", {
+        method: "POST",
+        body: JSON.stringify({
+          name: btn.getAttribute("data-toggle"),
+          enabled: btn.getAttribute("data-enable") === "1",
+        }),
+      });
+      markPending(r);
+      await loadJobs();
+    }));
+  });
+  body.querySelectorAll("[data-jobrm]").forEach((btn) => {
+    btn.addEventListener("click", () => guard(async () => {
+      const name = btn.getAttribute("data-jobrm");
+      if (!confirm(`Remove the job "${name}"?`)) return;
+      const r = await api("/api/jobs/delete", {
+        method: "POST", body: JSON.stringify({ name }) });
+      markPending(r);
+      await loadJobs();
+    }));
+  });
+}
+
 // ------------------------------------------------------------------- flow --
 async function loadStatus() { renderStatus(await api("/api/status")); }
 async function loadClients() { renderClients(await api("/api/clients")); }
+async function loadJobs() { renderJobs(await api("/api/jobs")); }
 
 function startPolling() {
   const tick = () => loadStatus().catch(() => {});
@@ -172,6 +221,7 @@ async function toApp() {
   show($("app"), true);
   startPolling();
   await guard(loadClients);
+  await guard(loadJobs);
 }
 
 // ------------------------------------------------------------------ events --
@@ -212,6 +262,28 @@ $("add-form").addEventListener("submit", async (e) => {
   });
 });
 
+$("job-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = $("job-error");
+  show(err, false);
+  try {
+    const r = await api("/api/jobs", {
+      method: "POST",
+      body: JSON.stringify({
+        name: $("job-name").value.trim(),
+        schedule: $("job-schedule").value.trim(),
+        user: $("job-user").value.trim() || "root",
+        description: $("job-desc").value.trim(),
+        script: $("job-script").value,
+      }),
+    });
+    markPending(r);
+    $("job-form").reset();
+    $("job-user").value = "root";
+    await loadJobs();
+  } catch (ex) { text(err, ex.message); show(err, true); }
+});
+
 $("apply-btn").addEventListener("click", async () => {
   const btn = $("apply-btn");
   btn.disabled = true;
@@ -221,6 +293,7 @@ $("apply-btn").addEventListener("click", async () => {
     await api("/api/apply", { method: "POST", body: "{}" });
     show($("pending"), false);
     await loadClients();
+    await loadJobs();
     await loadStatus();
   });
   btn.disabled = false;

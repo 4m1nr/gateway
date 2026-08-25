@@ -16,6 +16,11 @@ Request on stdin, JSON result on stdout:
     {"action": "probe"}
     {"action": "auth_status"}
     {"action": "verify_password", "password": "..."}
+    {"action": "jobs"}
+    {"action": "job_add", "name": "...", "schedule": "...", "script": "...",
+                          "user": "...", "description": "..."}
+    {"action": "job_rm",     "name": "..."}
+    {"action": "job_toggle", "name": "...", "enabled": true}
 """
 
 from __future__ import annotations
@@ -273,6 +278,97 @@ def act_probe() -> dict:
     }
 
 
+CRON_SHORTHAND = {
+    "@yearly", "@annually", "@monthly", "@weekly", "@daily",
+    "@midnight", "@hourly", "@reboot",
+}
+CRON_FIELD = re.compile(r"^[0-9A-Za-z*/,\-]+$")
+
+
+def valid_schedule(raw) -> str:
+    """Re-validated here, as root. The dashboard writes cron entries, and a
+    malformed line in /etc/cron.d is silently ignored rather than rejected —
+    the job would simply never run and nothing would say why."""
+    if not isinstance(raw, str) or not raw.strip():
+        fail("schedule is empty — use five cron fields or a shorthand like @daily")
+    expr = raw.strip()
+    if expr.startswith("@"):
+        if expr not in CRON_SHORTHAND:
+            fail(f"unknown shorthand {expr!r}; try {', '.join(sorted(CRON_SHORTHAND))}")
+        return expr
+    fields = expr.split()
+    if len(fields) != 5:
+        fail(f"schedule has {len(fields)} field(s); cron needs 5")
+    for i, field in enumerate(fields):
+        if not CRON_FIELD.match(field):
+            fail(f"schedule field {i + 1} ({field!r}) has characters cron will not accept")
+    return expr
+
+
+def valid_job_name(raw) -> str:
+    if not isinstance(raw, str) or not re.match(r"^[a-z0-9][a-z0-9-]{0,23}$", raw):
+        fail("job name must be 1-24 chars of lowercase letters, digits or dashes")
+    return raw
+
+
+def act_jobs() -> dict:
+    rc, out, err = run([GW, "job", "list", "--json"], timeout=20)
+    if rc != 0:
+        fail(err.strip() or "could not read the job list")
+    try:
+        jobs = json.loads(out or "[]")
+    except ValueError:
+        fail("could not parse the job list")
+    return {"jobs": jobs}
+
+
+def act_job_add(req: dict) -> dict:
+    name = valid_job_name(req.get("name"))
+    schedule = valid_schedule(req.get("schedule"))
+    script = req.get("script")
+    if not isinstance(script, str) or not script.strip():
+        fail("the script is empty — nothing to run")
+    if len(script) > 64 * 1024:
+        fail("script is too large (64 KB limit)")
+    user = req.get("user", "root")
+    if not isinstance(user, str) or not re.match(r"^[a-z_][a-z0-9_-]*$", user):
+        fail("invalid user name")
+    description = str(req.get("description", ""))[:200]
+
+    # The script reaches `gw job add` through a file, never through argv or a
+    # shell: it is arbitrary text and belongs nowhere near a command line.
+    tmp = pathlib.Path("/run/gateway") / f"job-{name}.tmp"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(script)
+    try:
+        cmd = [GW, "job", "add", name, schedule, "--file", str(tmp), "--user", user]
+        if description:
+            cmd += ["--desc", description]
+        rc, out, err = run(cmd, timeout=30)
+    finally:
+        tmp.unlink(missing_ok=True)
+    if rc != 0:
+        fail(err.strip() or out.strip() or "could not save the job")
+    return {"message": f"job {name} saved", "pending_apply": True}
+
+
+def act_job_rm(req: dict) -> dict:
+    name = valid_job_name(req.get("name"))
+    rc, out, err = run([GW, "job", "rm", name], timeout=30)
+    if rc != 0:
+        fail(err.strip() or out.strip() or "could not remove the job")
+    return {"message": f"job {name} removed", "pending_apply": True}
+
+
+def act_job_toggle(req: dict) -> dict:
+    name = valid_job_name(req.get("name"))
+    verb = "enable" if req.get("enabled") else "disable"
+    rc, out, err = run([GW, "job", verb, name], timeout=30)
+    if rc != 0:
+        fail(err.strip() or out.strip() or f"could not {verb} the job")
+    return {"message": f"job {name} {verb}d", "pending_apply": True}
+
+
 def act_auth_status() -> dict:
     """Whether a password exists — never the hash itself."""
     sys.path.insert(0, str(pathlib.Path(REPO) / "lib"))
@@ -325,6 +421,14 @@ def main() -> None:
         done(act_apply())
     elif action == "probe":
         done(act_probe())
+    elif action == "jobs":
+        done(act_jobs())
+    elif action == "job_add":
+        done(act_job_add(req))
+    elif action == "job_rm":
+        done(act_job_rm(req))
+    elif action == "job_toggle":
+        done(act_job_toggle(req))
     elif action == "auth_status":
         done(act_auth_status())
     elif action == "verify_password":

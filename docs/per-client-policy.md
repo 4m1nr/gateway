@@ -88,10 +88,24 @@ or the router's own address is refused rather than rendered into a ruleset.
 
 ## Tailnet traffic
 
-`100.64.0.0/10` is added to `@proxy_clients` when
-`tailscale.proxy_tailnet_egress = true`, so anything using this box as its
-Tailscale exit node is proxied like a LAN client. Set it to `false` and exit-node
-traffic goes out through your ISP instead.
+Anything using this box as its Tailscale exit node arrives from
+`100.64.0.0/10`, and `tailscale.exit_node_policy` decides what happens to it:
+
+```toml
+[tailscale]
+exit_node_policy = "work-laptop"   # any policy or profile name
+```
+
+| value | effect |
+|---|---|
+| `proxy` | out through the main tunnel (default) |
+| `direct` | out through your ISP, not intercepted at all |
+| `block` | dropped |
+| *profile name* | that profile's rules apply — including its upstreams |
+
+The last one is the interesting case: a phone abroad using this box as its exit
+node can reach the work upstream exactly like the work laptop on the LAN does,
+without any configuration on the phone.
 
 ## Profiles
 

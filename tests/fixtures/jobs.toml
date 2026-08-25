@@ -298,7 +298,7 @@ lifeline_after_min = 10
 #  ignored — nothing proxies this, so a header claiming otherwise is a lie.
 # ============================================================================
 [web]
-enabled = false
+enabled = true
 listen  = "0.0.0.0"
 port    = 8088
 
@@ -373,3 +373,31 @@ unattended_upgrades = true
 # SSH stays reachable from these sources only.
 ssh_allow_lan    = true
 ssh_allow_tailnet = true
+
+[[job]]
+name        = "backup-config"
+description = "Copy the AdGuard config somewhere safe"
+schedule    = "0 4 * * *"
+script      = '''
+install -d /var/backups/gateway
+cp -a /opt/AdGuardHome/AdGuardHome.yaml \
+      /var/backups/gateway/AdGuardHome-$(date +%F).yaml
+find /var/backups/gateway -name 'AdGuardHome-*.yaml' -mtime +14 -delete
+'''
+
+[[job]]
+name        = "speedtest"
+description = "Log throughput through the tunnel"
+schedule    = "@hourly"
+user        = "nobody"
+script      = '''
+curl -o /dev/null -s -w 'down %{speed_download} B/s\n' \
+     --socks5-hostname 127.0.0.1:10808 \
+     https://speed.cloudflare.com/__down?bytes=10000000
+'''
+
+[[job]]
+name     = "parked"
+schedule = "@weekly"
+enabled  = false
+script   = "echo this one is disabled"

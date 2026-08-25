@@ -1,0 +1,91 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch — the suite is fast, but a queue of
+# stale runs on a busy branch is just noise.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update -qq
+          # nftables: the suite feeds every generated ruleset to a real `nft -c`
+          # sudo:     provides visudo, which validates the dashboard's sudoers file
+          # zip:      used by the sandboxed updater tests
+          sudo apt-get install -y --no-install-recommends nftables sudo zip
+
+      - name: Show versions
+        run: |
+          python3 --version
+          nft --version
+          bash --version | head -1
+
+      - name: Check unprivileged user namespaces
+        id: userns
+        run: |
+          # tests/run.sh validates rulesets inside `unshare -rn` when not root.
+          # If the runner forbids that, fall back to running the suite as root
+          # so nft validation still happens rather than being skipped.
+          if unshare -rn true 2>/dev/null; then
+            echo "mode=user" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=root" >> "$GITHUB_OUTPUT"
+            echo "::notice::user namespaces unavailable, running the suite as root"
+          fi
+
+      - name: Run the test suite
+        run: |
+          if [ "${{ steps.userns.outputs.mode }}" = "root" ]; then
+            sudo -E ./tests/run.sh
+          else
+            ./tests/run.sh
+          fi
+
+      - name: Fixtures are up to date with the example config
+        run: |
+          # Fixtures are generated from gateway.example.toml. A stale fixture
+          # silently stops testing what it was written for, so regenerating must
+          # be a no-op on a clean tree.
+          python3 tests/make_fixtures.py
+          if ! git diff --quiet -- tests/fixtures; then
+            echo "::error::tests/fixtures is stale — run 'python3 tests/make_fixtures.py' and commit"
+            git --no-pager diff --stat -- tests/fixtures
+            exit 1
+          fi
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Errors (blocking)
+        run: |
+          # Error level only, so this gate stays trustworthy. These scripts run
+          # as root on a box that is someone's only route to the internet, so a
+          # real error here is worth stopping for.
+          shellcheck --severity=error --shell=bash \
+            bin/gw lib/common.sh scripts/*.sh templates/lib/*.sh tests/run.sh
+
+      - name: Warnings (advisory)
+        continue-on-error: true
+        run: |
+          # Not blocking yet: this codebase has never been linted, so the first
+          # run is a backlog rather than a regression. Triage these, fix them,
+          # then move --severity=warning into the blocking step above.
+          shellcheck --severity=warning --shell=bash \
+            bin/gw lib/common.sh scripts/*.sh templates/lib/*.sh tests/run.sh

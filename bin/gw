@@ -11,8 +11,9 @@
 #   gw status        what is running and whether the tunnel is up
 #   gw check         end-to-end verification, including leak tests
 #   gw client        add/remove/list per-client policy
+#   gw job           add/remove/list scheduled jobs
 #   gw web-passwd    set the dashboard password
-#   gw update        all | xray [ver] | geo | packages | --check
+#   gw update        all | xray | adguard | geo | packages | --check
 #   gw panic         disable interception, plain NAT, keep the LAN online
 #   gw logs          follow the relevant journals
 set -euo pipefail
@@ -97,6 +98,7 @@ cmd_apply() {
     local live="/$rel" mode=644
     case "$rel" in
       usr/local/lib/gateway/*.sh|usr/local/lib/gateway/*.py) mode=755 ;;
+      usr/local/lib/gateway/jobs/*.sh) mode=700 ;;
       etc/sudoers.d/*) mode=440 ;;
     esac
     install -D -m "$mode" "$staged" "$live"
@@ -290,6 +292,7 @@ cmd_check() { need_root check; "$REPO/scripts/90-verify.sh" "$@"; }
 
 # ---------------------------------------------------------------- client ----
 cmd_client() { $PY "$REPO/lib/clients.py" "$CONFIG" "$@"; }
+cmd_job()    { $PY "$REPO/lib/jobs.py"    "$CONFIG" "$@"; }
 
 # ------------------------------------------------------------- web-passwd ----
 cmd_web_passwd() {
@@ -308,16 +311,41 @@ cmd_update() {
 
   case "$what" in
     --check|check)
-      /usr/local/lib/gateway/xray-update.sh --check
-      return $?
+      # Report only. Nothing here changes the box, so it is safe to run from a
+      # cron job or just to see where you stand.
+      printf '%s--- xray ---%s\n' "$c_grn" "$c_off"
+      /usr/local/lib/gateway/xray-update.sh --check || true
+      printf '%s--- adguard ---%s\n' "$c_grn" "$c_off"
+      /usr/local/lib/gateway/adguard-update.sh --check || true
+      printf '%s--- geodata ---%s\n' "$c_grn" "$c_off"
+      /usr/local/lib/gateway/geoupdate.sh --check || true
+      printf '%s--- packages ---%s\n' "$c_grn" "$c_off"
+      apt_proxy_on
+      apt-get update -qq 2>/dev/null || true
+      apt-get -s upgrade 2>/dev/null | grep -E '^[0-9]+ upgraded' || echo "unknown"
+      apt_proxy_off
+      if command -v tailscale >/dev/null; then
+        printf '%s--- tailscale ---%s\n' "$c_grn" "$c_off"
+        tailscale version | head -1
+      fi
+      return 0
       ;;
     xray)
       # Tests the new binary against the live config and rolls back if the
       # service does not come up.
       /usr/local/lib/gateway/xray-update.sh "${1:-latest}"
       ;;
+    adguard|adguardhome)
+      /usr/local/lib/gateway/adguard-update.sh "${1:-latest}"
+      ;;
+    tailscale)
+      # apt-managed, so it follows the distro package rather than a release.
+      apt_proxy_on
+      apt-get update -qq && apt-get -y install --only-upgrade tailscale
+      apt_proxy_off
+      ;;
     geo|geodata)
-      /usr/local/lib/gateway/geoupdate.sh
+      /usr/local/lib/gateway/geoupdate.sh "${1:-}"
       ;;
     packages|apt)
       apt_proxy_on
@@ -325,10 +353,16 @@ cmd_update() {
       apt_proxy_off
       ;;
     all)
-      info "checking Xray"
-      /usr/local/lib/gateway/xray-update.sh --check || true
+      # Ordered least- to most-disruptive, and each step is survivable on its
+      # own: geodata rolls back, both binaries roll back, apt is apt.
       info "updating geodata"
       /usr/local/lib/gateway/geoupdate.sh || warn "geodata update failed"
+      info "updating Xray"
+      /usr/local/lib/gateway/xray-update.sh latest || warn "Xray update failed"
+      if [ -x /opt/AdGuardHome/AdGuardHome ]; then
+        info "updating AdGuard Home"
+        /usr/local/lib/gateway/adguard-update.sh latest || warn "AdGuard update failed"
+      fi
       info "updating packages"
       apt_proxy_on
       apt-get update -qq && apt-get -y upgrade
@@ -337,7 +371,8 @@ cmd_update() {
       cmd_apply
       ;;
     *)
-      die "unknown update target: $what (try: all | xray [version] | geo | packages | --check)"
+      die "unknown update target: $what
+  try: all | xray [version] | adguard [version] | tailscale | geo | packages | --check"
       ;;
   esac
 }
@@ -403,6 +438,7 @@ case "${1:-}" in
   status) shift; cmd_status "$@" ;;
   check)  shift; cmd_check "$@" ;;
   client) shift; cmd_client "$@" ;;
+  job)    shift; cmd_job "$@" ;;
   web-passwd) shift; cmd_web_passwd "$@" ;;
   init)   shift; cmd_init "$@" ;;
   update) shift; cmd_update "$@" ;;

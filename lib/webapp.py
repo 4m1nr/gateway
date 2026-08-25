@@ -201,13 +201,13 @@ class Handler(BaseHTTPRequestHandler):
                 }
             )
 
-        if path in ("/api/status", "/api/clients"):
+        gets = {"/api/status": "status", "/api/clients": "clients",
+                "/api/jobs": "jobs"}
+        if path in gets:
             session = self.gate_session()
             if session is None:
                 return
-            ok, data = self.privileged(
-                {"action": "status" if path.endswith("status") else "clients"}
-            )
+            ok, data = self.privileged({"action": gets[path]})
             return self.send_json(data, 200 if ok else 500)
 
         self.send_json({"error": "not found"}, 404)
@@ -240,6 +240,13 @@ class Handler(BaseHTTPRequestHandler):
             "/api/clients": lambda: {"action": "client_add", **{
                 k: body.get(k) for k in ("ip", "name", "policy")}},
             "/api/clients/delete": lambda: {"action": "client_rm", "ip": body.get("ip")},
+            "/api/jobs": lambda: {"action": "job_add", **{
+                k: body.get(k) for k in
+                ("name", "schedule", "script", "user", "description")}},
+            "/api/jobs/delete": lambda: {"action": "job_rm", "name": body.get("name")},
+            "/api/jobs/toggle": lambda: {
+                "action": "job_toggle", "name": body.get("name"),
+                "enabled": bool(body.get("enabled"))},
             "/api/apply": lambda: {"action": "apply"},
             "/api/probe": lambda: {"action": "probe"},
         }

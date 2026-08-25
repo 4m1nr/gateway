@@ -14,7 +14,7 @@ apt_proxy_on
 apt-get update -qq
 apt-get install -y --no-install-recommends \
   nftables iproute2 curl ca-certificates unzip jq \
-  chrony python3 python3-yaml openssl sudo \
+  chrony python3 python3-yaml openssl sudo cron \
   ethtool tcpdump dnsutils mtr-tiny vnstat \
   zram-tools unattended-upgrades
 

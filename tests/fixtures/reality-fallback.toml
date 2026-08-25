@@ -178,15 +178,25 @@ block_bittorrent = true     # true = drop torrent traffic at the gateway
 # ============================================================================
 #  Geodata
 #
-#  Where geoip.dat / geosite.dat come from. {0} is replaced with each file
-#  name. Refreshed weekly by gw-geoupdate.timer, and on demand with
-#  `gw update geo`; downloads are validated before they replace the old files,
-#  since a truncated .dat takes the tunnel down.
+#  Where the routing rule files come from. Refreshed daily by
+#  gw-geoupdate.timer and on demand with `gw update geo`. Downloads are
+#  size-checked and tested against the live Xray config before they replace
+#  the current files, with rollback if that fails.
 # ============================================================================
 [geodata]
+# Every *.dat asset in this repo's latest release is downloaded, so a new rule
+# file appearing upstream arrives on its own. The installed release tag is
+# recorded, so the daily timer is a cheap no-op until upstream publishes.
+repo = "Chocolate4U/Iran-v2ray-rules"
+
+# Naming files here pins the set instead: they are fetched via url_template
+# ({0} is replaced with each name) and release discovery is skipped.
+files = []
 url_template = "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat"
-files        = ["geoip", "geosite"]
-min_bytes    = 102400
+
+# Floor for a downloaded file. Catches truncated transfers and HTML error
+# pages served with a 200, either of which would take the tunnel down.
+min_bytes = 102400
 
 # ============================================================================
 #  DNS
@@ -260,9 +270,12 @@ enabled        = true
 ssh            = true
 exit_node      = true      # advertise as exit node
 subnet_router  = true      # advertise lan_cidr to the tailnet
-# Exit-node traffic (from 100.64.0.0/10) goes through Xray, so a remote device
-# using this box as its exit node comes out of your Xray server.
-proxy_tailnet_egress = true
+# How traffic from a remote device using this box as its exit node is routed.
+# Any policy or profile name: "proxy" sends it out your main tunnel, "direct"
+# out your ISP, "block" drops it, and a profile name applies that profile's
+# rules — so a phone abroad can reach the work upstream exactly like the work
+# laptop does.
+exit_node_policy = "proxy"
 # Route tailscaled's own control-plane + DERP traffic through Xray. Needed if
 # Tailscale is blocked upstream. Cost: when Xray dies, so does your remote
 # admin path — hence the lifeline below.
@@ -302,6 +315,38 @@ allow_cidrs = []
 session_hours     = 12
 max_failed_logins = 5
 lockout_minutes   = 15
+
+# ============================================================================
+#  Scheduled jobs
+#
+#  Bash on a cron schedule, rendered into /etc/cron.d/gw-jobs with each script
+#  in its own file under /usr/local/lib/gateway/jobs/. The crontab only ever
+#  names a script, because cron treats % in a crontab line as a newline and
+#  silently truncates there.
+#
+#  Manage them with `gw job add|rm|enable|disable|list`, or from the dashboard.
+#  Entries written by those tools live in a marked region at the end of this
+#  file; anything you write by hand elsewhere still runs and is left alone.
+#
+#  Use ''' for the script (a TOML *literal* string). The """ form processes
+#  escapes, so a bash line continuation would be collapsed and a backslash-n
+#  would become a real newline — quietly changing what actually runs.
+#
+#  Jobs run as root unless `user` says otherwise. That makes the dashboard's
+#  job editor the most powerful thing on the box: treat access to it as root
+#  access to the gateway.
+# ============================================================================
+
+# [[job]]
+# name        = "backup-config"
+# description = "Copy the AdGuard config somewhere safe"
+# schedule    = "0 4 * * *"     # five cron fields, or @daily / @hourly / ...
+# user        = "root"
+# enabled     = true
+# script      = '''
+# install -d /var/backups/gateway
+# cp -a /opt/AdGuardHome/AdGuardHome.yaml /var/backups/gateway/agh-$(date +%F).yaml
+# '''
 
 # ============================================================================
 #  Health watchdog

@@ -123,8 +123,9 @@ See `docs/per-client-policy.md`.
 | `gw check` | end-to-end verification incl. leak tests |
 | `gw check --killswitch` | also prove traffic dies rather than leaking |
 | `gw client` | `list` / `add <ip> <name> <policy>` / `rm <ip>` |
+| `gw job` | `list` / `add <name> <schedule>` / `rm` / `enable` / `disable` |
 | `gw web-passwd` | set the dashboard password |
-| `gw update` | `all` \| `xray [ver]` \| `geo` \| `packages` \| `--check` |
+| `gw update` | `all` \| `xray` \| `adguard` \| `tailscale` \| `geo` \| `packages` \| `--check` |
 | `gw panic` | drop to plain NAT so the LAN works while you debug |
 | `gw logs` | follow every relevant journal at once |
 
@@ -172,15 +173,17 @@ to the internet. Keep it that way: don't port-forward it, and don't widen
 ## Updating
 
 ```bash
-sudo gw update --check          # installed vs pinned vs latest, changes nothing
+sudo gw update --check          # every component, changes nothing
 sudo gw update xray             # newest release
 sudo gw update xray v25.9.11    # a specific version
+sudo gw update adguard          # AdGuard Home
+sudo gw update tailscale        # via apt
 sudo gw update geo              # geodata only
 sudo gw update                  # everything, then re-apply
 ```
 
-An Xray update that breaks the tunnel takes the whole LAN offline, so the
-updater refuses to be that failure:
+An update that breaks the tunnel takes the whole LAN offline, so Xray and
+AdGuard both go through the same guarded path:
 
 1. downloads and verifies (a `sha256` pin in `versions.toml` if you set one,
    otherwise the published digest — which proves integrity, not authenticity)
@@ -189,19 +192,24 @@ updater refuses to be that failure:
 3. keeps the old binary at `xray.previous` and rolls back to it if the service
    fails to start or does not stay up
 
-The same script does the first install, so there is one code path to trust.
+The same scripts do the first install, so there is one code path to trust
+rather than two that drift apart.
 
-Geodata comes from a configurable source, defaulting to the Iran rule set:
+Geodata pulls **every `.dat` asset** from the latest release of a configurable
+repo, so a new rule file appearing upstream arrives on its own:
 
 ```toml
 [geodata]
-url_template = "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat"
-files        = ["geoip", "geosite"]
+repo = "Chocolate4U/Iran-v2ray-rules"
 ```
 
-`{0}` is replaced with each file name. Downloads are size-checked and tested
-before they replace the current files, because a truncated `.dat` takes the
-tunnel down and this runs unattended from a weekly timer.
+The installed release tag is recorded, so the **daily** timer is a cheap no-op
+until upstream actually publishes. Downloads are size-checked and tested against
+the live Xray config before they replace anything, with rollback if that fails —
+a truncated `.dat` takes the tunnel down, and this runs unattended.
+
+Naming `files = ["geoip", "geosite"]` pins the set instead, fetched through
+`url_template` (`{0}` is each file name) with release discovery skipped.
 
 ## Bootstrap proxy
 
@@ -260,6 +268,38 @@ outboundTag = "work"
 A `json = """..."""` key takes a raw rule for anything the TOML form cannot
 express. `tests/check_custom_routes.py` asserts each rule lands where it asked
 to — misplacement produces no error, just a rule that quietly stops applying.
+
+## Scheduled jobs
+
+Bash on a cron schedule, from the CLI or the dashboard:
+
+```bash
+gw job add nightly-backup "0 4 * * *" --file backup.sh --desc "config backup"
+echo 'tailscale status' | gw job add tsping @hourly --user nobody -
+gw job list
+gw job disable nightly-backup
+sudo gw apply
+```
+
+Jobs are stored in `gateway.toml` like everything else, so a rebuilt box comes
+back with them. They render to `/etc/cron.d/gw-jobs`, with each script in its
+own file under `/usr/local/lib/gateway/jobs/`.
+
+That split is not cosmetic: **cron treats `%` in a crontab line as a newline**
+and silently truncates there, so a `curl -w '%{time_total}'` one-liner in a
+crontab quietly becomes a different command. Keeping the crontab to a single
+"run this script" line makes that impossible, and a test asserts no `%` ever
+reaches it.
+
+Scripts are stored as TOML *literal* strings so backslash continuations and
+`\n` survive verbatim. Output goes to the journal (`gw logs`), because a box
+with no MTA silently discards what cron would otherwise mail.
+
+⚠️ **Jobs run as root unless `user` says otherwise.** The dashboard's job editor
+is therefore the most powerful thing on the box — anyone who gets past the login
+can run arbitrary code as root. That is inherent to the feature, not a flaw in
+it, but it means the dashboard password is a root password. Set `[web] enabled =
+false` if you would rather not have that reachable over the network.
 
 ## Starting on boot
 
@@ -383,8 +423,10 @@ using Xray's stats API rather than inferring it.
 `.ir` names go to domestic resolvers directly. Upstreams must be IP literals —
 a hostname there would need DNS to resolve the DNS server.
 
-**Tailscale.** `100.64.0.0/10` is in `@proxy_clients`, so exit-node traffic goes
-through Xray: a phone abroad exits from your Xray server. `tailscaled`'s own
+**Tailscale.** Exit-node traffic is routed by `tailscale.exit_node_policy`,
+which takes any policy or profile name — so a phone abroad can exit through your
+main tunnel, go direct, be blocked, or get a profile's full rule set (reaching
+the work upstream exactly like the work laptop does). `tailscaled`'s own
 control-plane traffic is tunnelled too (useful where Tailscale is blocked) —
 with a **lifeline**: if the tunnel stays down past `lifeline_after_min`, the
 watchdog lets tailscaled talk direct so you don't lose remote access exactly

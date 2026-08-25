@@ -9,6 +9,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import pathlib
+import re
 import sys
 import tomllib
 
@@ -36,6 +37,49 @@ NAME_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
 
 class ConfigError(Exception):
     pass
+
+
+CRON_SHORTHAND = {
+    "@yearly", "@annually", "@monthly", "@weekly", "@daily",
+    "@midnight", "@hourly", "@reboot",
+}
+
+# Deliberately permissive within each field (ranges, steps, lists, names) but
+# strict about the shape: a five-field line, or a known @shorthand. A malformed
+# entry in /etc/cron.d is not rejected by cron, it is silently ignored — so the
+# job would simply never run and nothing would say why.
+_CRON_FIELD = re.compile(r"^[0-9A-Za-z*/,\-]+$")
+
+
+def _validate_cron(expr: str, where: str) -> None:
+    if not expr:
+        raise ConfigError(
+            f"{where}.schedule is empty. Use five cron fields "
+            '("0 4 * * *") or a shorthand like "@daily".'
+        )
+    if expr.startswith("@"):
+        if expr not in CRON_SHORTHAND:
+            raise ConfigError(
+                f"{where}.schedule {expr!r} is not a known shorthand. "
+                f"Expected one of: {', '.join(sorted(CRON_SHORTHAND))}"
+            )
+        return
+    fields = expr.split()
+    if len(fields) != 5:
+        raise ConfigError(
+            f"{where}.schedule {expr!r} has {len(fields)} field(s); cron needs 5 "
+            "(minute hour day-of-month month day-of-week)"
+        )
+    for pos, field in enumerate(fields):
+        if not _CRON_FIELD.match(field):
+            raise ConfigError(
+                f"{where}.schedule field {pos + 1} ({field!r}) contains "
+                "characters cron will not accept"
+            )
+    if "%" in expr:
+        raise ConfigError(
+            f"{where}.schedule contains '%', which cron treats as a newline"
+        )
 
 
 def _outbound_address(ob: dict) -> str | None:
@@ -134,6 +178,14 @@ class Config:
 
         # ---- geodata --------------------------------------------------------
         geo = raw.get("geodata", {})
+        # Release-asset discovery: every *.dat in the latest release is pulled,
+        # so a new rule file appearing upstream arrives on its own.
+        self.geo_repo = str(geo.get("repo", "Chocolate4U/Iran-v2ray-rules")).strip("/")
+        if self.geo_repo and self.geo_repo.count("/") != 1:
+            raise ConfigError(
+                f"geodata.repo {self.geo_repo!r} must be owner/name, e.g. "
+                "'Chocolate4U/Iran-v2ray-rules'"
+            )
         self.geo_url = geo.get(
             "url_template",
             "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat",
@@ -143,7 +195,14 @@ class Config:
                 "geodata.url_template must contain {0}, which is replaced with "
                 "each file name (geoip, geosite)"
             )
-        self.geo_files = geo.get("files", ["geoip", "geosite"])
+        # Empty means "whatever the release ships". Naming files here pins the
+        # set and uses url_template instead of discovery.
+        self.geo_files = geo.get("files", [])
+        if not self.geo_files and not self.geo_repo:
+            raise ConfigError(
+                "geodata needs either `repo` (download every .dat in the latest "
+                "release) or a non-empty `files` list to use with url_template"
+            )
         # A truncated .dat takes the tunnel down, and this runs unattended.
         self.geo_min_bytes = int(geo.get("min_bytes", 102400))
 
@@ -377,7 +436,15 @@ class Config:
         self.ts_ssh = bool(ts.get("ssh", True))
         self.ts_exit_node = bool(ts.get("exit_node", True))
         self.ts_subnet_router = bool(ts.get("subnet_router", True))
-        self.ts_proxy_egress = bool(ts.get("proxy_tailnet_egress", True))
+        # Which policy exit-node traffic gets. Any built-in policy or profile
+        # name, so a remote device exiting through this box can be routed
+        # exactly like a LAN client — including through a profile's upstreams.
+        # Validated after profiles are known; see below.
+        self._ts_exit_policy_raw = ts.get(
+            "exit_node_policy",
+            # Back-compat with the old boolean.
+            "proxy" if ts.get("proxy_tailnet_egress", True) else "direct",
+        )
         self.ts_route_control = bool(ts.get("route_control_via_xray", True))
         self.ts_lifeline_min = int(ts.get("lifeline_after_min", 10))
 
@@ -414,6 +481,53 @@ class Config:
         self.session_hours = int(w.get("session_hours", 12))
         self.max_failed_logins = int(w.get("max_failed_logins", 5))
         self.lockout_minutes = int(w.get("lockout_minutes", 15))
+
+        if self._ts_exit_policy_raw not in self.policies:
+            raise ConfigError(
+                f"tailscale.exit_node_policy {self._ts_exit_policy_raw!r} is not "
+                f"a known policy. Expected one of: {', '.join(self.policies)}"
+            )
+        self.ts_exit_policy = self._ts_exit_policy_raw
+        # Kept as a derived convenience: is tailnet egress intercepted at all?
+        self.ts_proxy_egress = self.ts_exit_policy in self.intercepted
+
+        # ---- scheduled jobs -------------------------------------------------
+        # Bash + a cron schedule, rendered into /etc/cron.d. Managed from the
+        # CLI or the dashboard, but stored here like everything else, so a
+        # rebuilt box comes back with its jobs.
+        self.jobs: list[dict] = []
+        seen_jobs = set()
+        for i, j in enumerate(raw.get("job", [])):
+            where = f"job[{i}]"
+            name = j.get("name", "")
+            if not NAME_RE.match(str(name)):
+                raise ConfigError(
+                    f"{where}.name {name!r} must be 1-24 chars of lowercase "
+                    "letters, digits or dashes"
+                )
+            if name in seen_jobs:
+                raise ConfigError(f"{where}: duplicate job name {name!r}")
+            seen_jobs.add(name)
+
+            schedule = str(j.get("schedule", "")).strip()
+            _validate_cron(schedule, where)
+
+            script = j.get("script", "")
+            if not isinstance(script, str) or not script.strip():
+                raise ConfigError(f"{where}.script is empty — nothing to run")
+
+            user = str(j.get("user", "root"))
+            if not re.match(r"^[a-z_][a-z0-9_-]*$", user):
+                raise ConfigError(f"{where}.user {user!r} is not a valid user name")
+
+            self.jobs.append({
+                "name": name,
+                "schedule": schedule,
+                "script": script,
+                "user": user,
+                "enabled": bool(j.get("enabled", True)),
+                "description": str(j.get("description", "")),
+            })
 
         # ---- health ---------------------------------------------------------
         h = raw.get("health", {})
@@ -546,18 +660,29 @@ class Config:
     def proxy_sources(self) -> list[str]:
         """Sources that get intercepted: plain proxy clients and every profile
         client, since splitting a profile by destination requires Xray to see
-        the traffic. Plus the tailnet when exit-node egress is proxied."""
+        the traffic. Plus the tailnet when exit-node egress is intercepted."""
         s = [c["ip"] for c in self.clients if c["policy"] in self.intercepted]
-        if self.ts_enabled and self.ts_proxy_egress:
+        if self.ts_enabled and self.ts_exit_policy in self.intercepted:
             s.append(TAILNET_V4)
         return s
 
+    @property
+    def tailnet_blocked(self) -> bool:
+        return self.ts_enabled and self.ts_exit_policy == "block"
+
+    @property
+    def tailnet_direct(self) -> bool:
+        return self.ts_enabled and self.ts_exit_policy == "direct"
+
     def profile_sources(self, name: str) -> list[str]:
         """Which source addresses this profile applies to. When the profile is
-        also the LAN default, that includes every unlisted device."""
+        also the LAN default, that includes every unlisted device; when it is
+        the exit-node policy, it includes the tailnet."""
         srcs = self.clients_by(name)
         if self.default_policy == name:
             srcs.append(self.lan_cidr)
+        if self.ts_enabled and self.ts_exit_policy == name:
+            srcs.append(TAILNET_V4)
         return srcs
 
     @property

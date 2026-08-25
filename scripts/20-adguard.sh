@@ -25,14 +25,18 @@ CONF
   systemctl disable --now systemd-resolved
 fi
 
+"$REPO/bin/gw" render >/dev/null
+install -D -m 0644 "$REPO/build/usr/local/lib/gateway/env" /usr/local/lib/gateway/env
+
 if [ ! -x /opt/AdGuardHome/AdGuardHome ]; then
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-  URL="https://github.com/AdguardTeam/AdGuardHome/releases/download/$VER/$ASSET"
-  info "downloading AdGuard Home $VER"
-  curl -fsSL --max-time 300 -o "$TMP/$ASSET" "$URL" || die "download failed: $URL"
-  verify_sha "$TMP/$ASSET" "$SHA" \
-    "https://github.com/AdguardTeam/AdGuardHome/releases/download/$VER/checksums.txt"
-  tar -xzf "$TMP/$ASSET" -C /opt
+  # Same installer `gw update adguard` uses: verify, keep the old binary,
+  # roll back if the service does not come up.
+  install -D -m 0755 "$REPO/build/usr/local/lib/gateway/adguard-update.sh" \
+    /usr/local/lib/gateway/adguard-update.sh
+  install -D -m 0755 "$REPO/build/usr/local/lib/gateway/net.sh" \
+    /usr/local/lib/gateway/net.sh
+  GW_PROXY="${GW_PROXY:-$(gw_proxy)}" REPO="$REPO" \
+    /usr/local/lib/gateway/adguard-update.sh "$(version_of adguard)"
   /opt/AdGuardHome/AdGuardHome -s install
 else
   info "AdGuard Home already installed"
@@ -60,7 +64,6 @@ NEXT
 fi
 
 info "merging gateway settings into AdGuard Home"
-"$REPO/bin/gw" render >/dev/null
 python3 "$REPO/lib/agh_merge.py" /opt/AdGuardHome/AdGuardHome.yaml \
   "$REPO/build/adguard-overrides.json"
 systemctl restart AdGuardHome

@@ -100,6 +100,44 @@
     <p class="error hidden" id="client-error"></p>
   </section>
 
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Scheduled jobs</h2>
+    </div>
+    <p class="muted small">
+      Bash on a cron schedule. Jobs run <strong>as root by default</strong> —
+      this is the most powerful thing the dashboard can do, so treat access to
+      it as root access to the gateway.
+    </p>
+
+    <table id="jobs">
+      <thead><tr><th>Name</th><th>Schedule</th><th>User</th><th>Runs</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <details class="add-job">
+      <summary>Add a job</summary>
+      <form id="job-form">
+        <div class="job-grid">
+          <label>Name<input type="text" id="job-name" required maxlength="24"
+                 pattern="[a-z0-9][a-z0-9-]*" placeholder="nightly-backup"></label>
+          <label>Schedule<input type="text" id="job-schedule" required
+                 placeholder="0 4 * * *  or  @daily"></label>
+          <label>User<input type="text" id="job-user" value="root"
+                 pattern="[a-z_][a-z0-9_-]*"></label>
+        </div>
+        <label>Description<input type="text" id="job-desc" maxlength="200"
+               placeholder="what this is for"></label>
+        <label>Script
+          <textarea id="job-script" rows="8" required spellcheck="false"
+            placeholder="#!/bin/bash is added for you, along with set -euo pipefail"></textarea>
+        </label>
+        <button type="submit" class="secondary">Save job</button>
+        <p class="error hidden" id="job-error"></p>
+      </form>
+    </details>
+  </section>
+
   <footer class="muted small">
     Changes to clients are written to <code>gateway.toml</code> and only take
     effect after <strong>Apply</strong>.

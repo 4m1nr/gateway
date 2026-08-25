@@ -276,7 +276,7 @@ subnet_router  = true      # advertise lan_cidr to the tailnet
 # out your ISP, "block" drops it, and a profile name applies that profile's
 # rules — so a phone abroad can reach the work upstream exactly like the work
 # laptop does.
-exit_node_policy = "proxy"
+exit_node_policy = "work-laptop"
 # Route tailscaled's own control-plane + DERP traffic through Xray. Needed if
 # Tailscale is blocked upstream. Cost: when Xray dies, so does your remote
 # admin path — hence the lifeline below.
@@ -298,7 +298,7 @@ lifeline_after_min = 10
 #  ignored — nothing proxies this, so a header claiming otherwise is a lie.
 # ============================================================================
 [web]
-enabled = false
+enabled = true
 listen  = "0.0.0.0"
 port    = 8088
 
@@ -373,3 +373,42 @@ unattended_upgrades = true
 # SSH stays reachable from these sources only.
 ssh_allow_lan    = true
 ssh_allow_tailnet = true
+
+[[upstream]]
+name = "work"
+file = "outbounds/work.json"
+
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+
+  [[profile.route]]
+  via     = "work"
+  domains = ["domain:corp.work-example.com"]
+  ips     = ["10.20.0.0/16", "203.0.113.0/24"]
+
+  [[profile.route]]
+  via     = "block"
+  domains = ["geosite:category-ads-all"]
+
+[[profile]]
+name = "mostly-local"
+base = "direct"
+
+  [[profile.route]]
+  via = "work"
+  ips = ["10.20.0.0/16"]
+
+  [[profile.route]]
+  via     = "proxy"
+  domains = ["domain:news.example.com"]
+
+[[client]]
+ip     = "192.168.1.70"
+name   = "work-laptop"
+policy = "work-laptop"
+
+[[client]]
+ip     = "192.168.1.71"
+name   = "desktop"
+policy = "mostly-local"
