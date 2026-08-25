@@ -314,11 +314,20 @@ cmd_status() {
   local fails;  fails=$(cat /run/gateway/fails 2>/dev/null || echo 0)
   local life;   life=$(cat /run/gateway/lifeline 2>/dev/null || echo 0)
 
+  local detail
+  detail=$(cat /run/gateway/detail 2>/dev/null || true)
   case "$tunnel" in
-    up)   printf 'tunnel      %sUP%s\n' "$c_grn" "$c_off" ;;
-    down) printf 'tunnel      %sDOWN%s (%s consecutive failed probes)\n' "$c_red" "$c_off" "$fails" ;;
-    *)    printf 'tunnel      %sunknown%s (health check has not run yet)\n' "$c_yel" "$c_off" ;;
+    up)   printf 'gateway     %sOK%s (intercepted traffic reaches the tunnel)\n' "$c_grn" "$c_off" ;;
+    degraded)
+          # The distinction that matters: Xray is fine, the packets are not
+          # getting to it. Reporting this as "tunnel down" sends you to the
+          # wrong half of the system.
+          printf 'gateway     %sDEGRADED%s — tunnel up, interception broken (%s failed probes)\n' \
+            "$c_red" "$c_off" "$fails" ;;
+    down) printf 'gateway     %sDOWN%s (%s consecutive failed probes)\n' "$c_red" "$c_off" "$fails" ;;
+    *)    printf 'gateway     %sunknown%s (health check has not run yet)\n' "$c_yel" "$c_off" ;;
   esac
+  [ -n "$detail" ] && printf '%s  %s%s\n' "$c_dim" "$detail" "$c_off"
   [ "$life" = "1" ] && printf 'lifeline    %sENGAGED%s — tailscaled is bypassing the tunnel\n' "$c_yel" "$c_off"
 
   if systemctl cat gateway.target >/dev/null 2>&1; then

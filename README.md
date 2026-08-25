@@ -45,9 +45,18 @@ the LAN offline.
 
 ## Opting a device in
 
-**Set its default gateway to the box's IP.** That's the whole procedure — the
-device is now proxied, split-routed and covered by the kill switch. Point its
-DNS at the same address to get filtering too.
+**Set its default gateway to the box's IP, and its DNS to the same address.**
+
+Both matter. DNS is not just for filtering: if a device keeps using the
+router's resolver, blocked names come back as a private address, the device
+sends traffic there, and the gateway drops it as unreachable. The symptom is
+one site failing while everything else works.
+
+The gateway redirects plain DNS that passes through it, so a device pointed at
+a public resolver is covered automatically. A device pointed at the **router**
+resolves over the local segment and never reaches the box at all — for those,
+either set the DNS on the device, or set the router's DHCP to hand out the
+box as the DNS server.
 
 Nothing needs to be registered anywhere. The firewall's catch-all covers the
 whole LAN, and only traffic that is actually being forwarded reaches it, so it

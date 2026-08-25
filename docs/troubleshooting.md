@@ -118,6 +118,32 @@ If port 53 is taken, `systemd-resolved`'s stub listener is still running —
 check that `upstreams_proxied` are **IP literals**: a hostname there can't be
 resolved without DNS, which is the thing you're trying to fix.
 
+## A client has no internet with the box as its gateway
+
+Usually DNS. If the client still uses the router's resolver, blocked names
+resolve to a private address, and the gateway drops traffic aimed there because
+it is genuinely unreachable — the alternative, bypassing it, black-holes the
+packets silently.
+
+```bash
+nft list chain inet gateway prerouting | grep -A1 poisoned-dns   # counter climbing?
+```
+
+A climbing `poisoned-dns` counter confirms it. Point the client's DNS at the
+box, or set the router's DHCP to hand out the box as the DNS server.
+
+If that counter is flat, check whether the client reaches Xray at all:
+
+```bash
+journalctl -u xray -f          # then load a page on the client
+nft list chain inet gateway forward | grep -A1 killswitch
+```
+
+A climbing `killswitch` counter means the traffic reached the forward chain
+instead of being intercepted. No log lines and no counters means the packets
+are not arriving — check the client's default gateway, and that its address is
+inside `net.lan_cidr`.
+
 ## A client bypasses the tunnel
 
 - IPv6. Check `ip -6 addr show` on the *client*. If it has a global v6 address,

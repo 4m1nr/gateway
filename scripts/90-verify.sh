@@ -125,6 +125,11 @@ sec "egress"
 # returns early on skuid), which gives us the box's real address for free.
 # gw_as_user, not runuser: runuser is in util-linux-extra on Debian 12+ and is
 # absent from a minimal install.
+# The path a client's traffic actually takes: no SOCKS shortcut, so this
+# exercises output marking, policy routing, prerouting interception and Xray.
+# Deliberately not proxied: the point is to traverse the interception path
+# exactly as a client would.
+INTERCEPTED=$(curl -fsS --max-time 20 https://api.ipify.org 2>/dev/null || echo "")  # gw:direct-ok
 REAL=$(gw_as_user xray curl -fsS --max-time 15 https://api.ipify.org 2>/dev/null || echo "")
 TUN=$(curl -fsS --max-time 20 --socks5-hostname "127.0.0.1:$SOCKS_PORT" \
         https://api.ipify.org 2>/dev/null || echo "")
@@ -140,6 +145,21 @@ else bad "tunnel egress FAILED — check 'journalctl -u xray -n 50'"; fi
 if [ -n "$REAL" ] && [ -n "$TUN" ]; then
   if [ "$REAL" != "$TUN" ]; then ok "tunnel egress differs from the ISP address"
   else bad "tunnel and direct show the SAME address — traffic is not being proxied"; fi
+fi
+
+# This is the one that matters. SOCKS working while this fails means Xray is
+# healthy and the packets are not reaching it — the failure mode that reported
+# "tunnel UP" through two separate outages.
+if [ -z "$INTERCEPTED" ]; then
+  bad "intercepted egress FAILED — a plain request from this box does not reach the tunnel.
+     Check: nft list chain inet gateway prerouting (the 'iif lo' tproxy rule must
+     precede 'iif lo return'), and 'ip rule list' for the fwmark rule."
+elif [ -n "$TUN" ] && [ "$INTERCEPTED" = "$TUN" ]; then
+  ok "intercepted egress leaves via the tunnel ($INTERCEPTED)"
+elif [ -n "$REAL" ] && [ "$INTERCEPTED" = "$REAL" ]; then
+  bad "intercepted egress leaves via the ISP ($INTERCEPTED) — traffic is escaping the tunnel"
+else
+  ok "intercepted egress works ($INTERCEPTED)"
 fi
 
 # ------------------------------------------------------------- split rules --

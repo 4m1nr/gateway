@@ -94,6 +94,34 @@ def render_nft(cfg: Config) -> str:
         fwd_default = ""
         post_default = ""
 
+    poisoned_rule = (
+        '        ip daddr @poisoned_dst counter drop comment "poisoned-dns"\n'
+        if cfg.poisoned_dst else
+        "        # routing.drop_private_destinations = false\n"
+    )
+
+    # TPROXY runs at mangle priority (-150) and nat prerouting at dstnat
+    # (-100), so an unqualified tproxy rule would swallow port 53 before the
+    # redirect below ever ran — leaving dns.intercept enabled and inert.
+    dns_exclude = "th dport != 53 " if cfg.dns_intercept else ""
+
+    # Catches clients pointed at a public resolver. One pointed at the router
+    # resolves over the local segment and never reaches this box at all — for
+    # those, the router's DHCP has to hand out this box as the DNS server.
+    if cfg.dns_intercept:
+        dns_chain = (
+            "    chain dnsintercept {\n"
+            "        type nat hook prerouting priority dstnat; policy accept;\n"
+            "        # Opted-out clients keep whatever resolver they chose.\n"
+            "        ip saddr @direct_clients return\n"
+            "        ip daddr $BOX return\n"
+            "        ip saddr $LAN meta l4proto { tcp, udp } th dport 53 \\\n"
+            f"            dnat ip to $BOX:{cfg.dns_port}\n"
+            "    }\n"
+        )
+    else:
+        dns_chain = "    # dns.intercept = false\n"
+
     ssh_rule = "        ip saddr $LAN tcp dport 22 accept\n" if cfg.ssh_allow_lan else ""
     ui_rule = f"        ip saddr $LAN tcp dport {cfg.ui_port} accept\n"
 
@@ -130,6 +158,7 @@ def render_nft(cfg: Config) -> str:
                 + ([gwconfig.TAILNET_V4] if cfg.tailnet_blocked else [])
             ),
             "ELEM_BYPASS": nft_elements(cfg.bypass_dst),
+            "ELEM_POISONED": nft_elements(cfg.poisoned_dst),
             "ELEM_EXCEPTIONS": exceptions,
             "IPV6_PREROUTING": v6_pre,
             "IPV6_OUTPUT": v6_out,
@@ -137,6 +166,9 @@ def render_nft(cfg: Config) -> str:
             "PREROUTING_DEFAULT": pre_default,
             "FORWARD_DEFAULT": fwd_default,
             "POSTROUTING_DEFAULT": post_default,
+            "POISONED_RULE": poisoned_rule,
+            "DNS_INTERCEPT": dns_chain,
+            "DNS_EXCLUDE": dns_exclude,
             "INPUT_SSH": ssh_rule,
             "INPUT_UI": ui_rule,
             "INPUT_WEB": web_rule,

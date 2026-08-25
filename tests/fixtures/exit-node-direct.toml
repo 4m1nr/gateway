@@ -176,6 +176,16 @@ direct_geoip   = ["geoip:private", "geoip:ir"]
 block_geosite  = []          # e.g. ["geosite:category-ads-all"]
 block_bittorrent = false     # true = drop torrent traffic at the gateway
 
+# Drop client traffic aimed at private space that is not reachable here,
+# instead of silently bypassing it. That traffic is almost always a client
+# following a poisoned DNS answer, and bypassing it black-holes the packets
+# with no counter and no log. Shows up as "poisoned-dns" in the drop counters.
+drop_private_destinations = true
+
+# Private networks that ARE reachable from this box, and so must not be
+# treated as poisoned — another VLAN, a site-to-site link.
+extra_local_networks = []
+
 # ============================================================================
 #  Geodata
 #
@@ -214,6 +224,17 @@ upstreams_direct  = ["178.22.122.100", "185.51.200.2"]
 # Domains sent to upstreams_direct.
 direct_suffixes   = ["ir"]
 bootstrap         = ["1.1.1.1", "8.8.8.8"]
+# Redirect plain DNS from LAN clients to AdGuard whatever they are configured
+# to use, so a device only has to set its gateway. Note the limit: a client
+# pointed at the ROUTER resolves over the local segment and never reaches this
+# box at all — for those, set the router's DHCP to hand out this box as DNS.
+#
+# This matters beyond filtering. A filtering resolver answers blocked names
+# with a private address; the client then sends traffic there, and it is
+# dropped as unreachable. The symptom is one site failing while everything
+# else works.
+intercept = true
+
 blocklists = [
   "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt",
   "https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt",

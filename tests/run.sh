@@ -86,6 +86,31 @@ for f in tests/fixtures/*.toml; do
     bad "$name: prerouting returns on lo before intercepting marked local traffic — the box will have no internet"
   fi
 
+  # A poisoned-DNS drop that overlapped the LAN would break local traffic; one
+  # that missed 10.10.34.34 would not do its job.
+  if grep -q 'poisoned-dns' "$nftf"; then
+    if python3 -c "
+import ipaddress, sys
+sys.path.insert(0,'lib'); import gwconfig
+c = gwconfig.load('$f')
+lan = ipaddress.ip_network(c.lan_cidr)
+nets = [ipaddress.ip_network(x) for x in c.poisoned_dst]
+assert not any(n.overlaps(lan) for n in nets), 'overlaps the LAN'
+assert any(ipaddress.ip_address('10.10.34.34') in n for n in nets), 'misses 10.10.34.34'
+"; then
+      ok "$name: poisoned-dns set excludes the LAN and catches private answers"
+    else bad "$name: poisoned-dns set is wrong (see above)"; fi
+  fi
+
+  # dns.intercept only works if port 53 is excluded from tproxy: mangle runs at
+  # -150 and nat prerouting at -100, so tproxy would swallow it first and the
+  # redirect would sit there doing nothing.
+  if grep -q 'chain dnsintercept' "$nftf"; then
+    if grep -q 'dport != 53' "$nftf"; then
+      ok "$name: DNS interception is reachable (port 53 excluded from tproxy)"
+    else bad "$name: dnsintercept chain exists but tproxy still swallows port 53"; fi
+  fi
+
   # The loop guards are equally load-bearing: without them the box wedges the
   # moment interception is enabled.
   if grep -q 'meta mark \$MARK_XRAY return' "$nftf" && grep -q 'meta skuid "xray" return' "$nftf"; then
@@ -385,6 +410,10 @@ for f in scripts/*.sh templates/lib/*.sh; do
     #   curl -6          the IPv6 probe, testing whether v6 egress exists at all
     case "$line" in
       *socks5-hostname*|*"gw_as_user xray"*|*"curl -6"*) continue ;;
+      # Explicitly marked as needing a direct, unproxied request. Used by the
+      # health and verify probes, which exist to test the interception path —
+      # routing them through a proxy would bypass what they measure.
+      *gw:direct-ok*) continue ;;
     esac
     case "$line" in
       *gw_curl*)
@@ -398,6 +427,22 @@ for f in scripts/*.sh templates/lib/*.sh; do
 $joined
 EOFJOINED
 done
+
+# The marker must sit on the curl line itself. On its own comment line it would
+# be stripped before the check ever sees it, and would silently exempt nothing
+# while looking like it did.
+stray_markers=""
+for f in scripts/*.sh templates/lib/*.sh; do
+  grep -q 'gw:direct-ok' "$f" 2>/dev/null || continue
+  if grep 'gw:direct-ok' "$f" | grep -qv 'curl'; then
+    stray_markers="$stray_markers $(basename "$f")"
+  fi
+done
+if [ -n "$stray_markers" ]; then
+  bad "gw:direct-ok is on a line with no curl in:$stray_markers"
+else
+  ok "every gw:direct-ok marker sits on the invocation it exempts"
+fi
 
 if [ -z "$offenders" ]; then
   ok "no bare curl to an external host in the setup scripts"

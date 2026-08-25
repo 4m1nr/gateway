@@ -43,25 +43,62 @@ lifeline_off() {
   log notice "tunnel recovered — Tailscale lifeline released"
 }
 
-probe() {
-  systemctl is-active --quiet xray || return 1
+# The probe that matters: a plain request, which the output chain marks and
+# policy routing loops back through lo into the TPROXY listener. That exercises
+# the whole path a client's traffic takes — marking, policy routing,
+# prerouting interception, Xray, the tunnel.
+#
+# The old probe used --socks5-hostname to reach Xray's SOCKS inbound directly.
+# That skips every one of those steps, so it reported "tunnel UP" through two
+# separate outages where the box had no internet at all: once when prerouting
+# returned early on lo, and once when a poisoned DNS answer sent traffic out
+# unintercepted. A health check that cannot see the failure is worse than none,
+# because it argues against you while you debug.
+probe_intercepted() {
+  # Deliberately not proxied: a proxy would bypass the path being tested.
+  curl -fsS --max-time "$PROBE_TIMEOUT" -o /dev/null "$PROBE_URL"  # gw:direct-ok
+}
+
+# Kept only to tell the two failures apart: if this works and the one above
+# does not, Xray and the tunnel are fine and interception is broken.
+probe_socks() {
   curl -fsS --max-time "$PROBE_TIMEOUT" \
        --socks5-hostname "127.0.0.1:$SOCKS_PORT" \
        -o /dev/null "$PROBE_URL"
 }
 
-if probe; then
-  [ "$FAILS" -gt 0 ] && log notice "tunnel healthy again after $FAILS failed probe(s)"
+if ! systemctl is-active --quiet xray; then
+  STATUS=down
+  DETAIL="xray is not running"
+elif probe_intercepted; then
+  STATUS=up
+  DETAIL=""
+elif probe_socks; then
+  # Xray and the tunnel are healthy; the packets are not reaching them.
+  STATUS=degraded
+  DETAIL="the tunnel works via SOCKS but intercepted traffic does not reach it — check the nftables prerouting/output chains and 'ip rule'"
+else
+  STATUS=down
+  DETAIL="neither the intercepted path nor SOCKS reached $PROBE_URL"
+fi
+
+echo "$STATUS" > "$STATE/tunnel"
+[ -n "$DETAIL" ] && echo "$DETAIL" > "$STATE/detail" || rm -f "$STATE/detail"
+
+if [ "$STATUS" = up ]; then
+  [ "$FAILS" -gt 0 ] && log notice "gateway healthy again after $FAILS failed probe(s)"
   echo 0 > "$STATE/fails"
-  echo up > "$STATE/tunnel"
   lifeline_off
   exit 0
 fi
 
 FAILS=$((FAILS + 1))
 echo "$FAILS" > "$STATE/fails"
-echo down > "$STATE/tunnel"
-log warning "tunnel probe failed ($FAILS)"
+if [ "$STATUS" = degraded ]; then
+  log err "INTERCEPTION BROKEN ($FAILS): $DETAIL"
+else
+  log warning "gateway probe failed ($FAILS): $DETAIL"
+fi
 
 if [ "$FAILS" -eq "$RESTART_AFTER" ]; then
   log err "restarting xray after $FAILS failed probes"

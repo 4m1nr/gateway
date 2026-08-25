@@ -176,6 +176,14 @@ class Config:
         self.block_geosite = rt.get("block_geosite", [])
         self.block_bittorrent = bool(rt.get("block_bittorrent", False))
 
+        # Private ranges that are genuinely reachable here, beyond this LAN.
+        # Everything else in RFC1918 arriving from a client is treated as a
+        # poisoned DNS answer rather than quietly bypassed — see the ruleset.
+        self.extra_local = []
+        for c in rt.get("extra_local_networks", []):
+            self.extra_local.append(str(_net(c, "routing.extra_local_networks")))
+        self.drop_private = bool(rt.get("drop_private_destinations", True))
+
         # ---- geodata --------------------------------------------------------
         geo = raw.get("geodata", {})
         # Release-asset discovery: every *.dat in the latest release is pulled,
@@ -229,6 +237,11 @@ class Config:
         self.up_direct = dns.get("upstreams_direct", ["1.1.1.1"])
         self.direct_suffixes = dns.get("direct_suffixes", ["ir"])
         self.bootstrap = dns.get("bootstrap", ["1.1.1.1"])
+        # Redirect plain DNS from LAN clients to AdGuard, whatever they are
+        # configured to use. Only catches queries that actually traverse this
+        # box: a client pointed at the router resolves over the local segment
+        # and never reaches us.
+        self.dns_intercept = bool(dns.get("intercept", True))
         self.blocklists = dns.get("blocklists", [])
         self.querylog_days = int(dns.get("querylog_days", 3))
         self.statslog_days = int(dns.get("statslog_days", 7))
@@ -687,7 +700,39 @@ class Config:
 
     @property
     def bypass_dst(self) -> list[str]:
+        """Destinations that must never enter the tunnel: local scopes, the
+        tailnet, and RFC1918 as a whole. Used by the output chain, where the
+        box's own traffic to a private address is local business."""
         return list(RESERVED_DST)
+
+    @property
+    def poisoned_dst(self) -> list[str]:
+        """RFC1918 space that is NOT reachable from here.
+
+        A filtering resolver answers a blocked name with a private address
+        (10.10.34.34 and relatives). A client then sends real traffic there.
+        Bypassing it — which is what treating all of RFC1918 as "local" does —
+        drops that traffic into a black hole with no counter and no log, and
+        the symptom is "this one site does not load" with everything else fine.
+
+        Computed as RFC1918 minus what is genuinely local, so it can never
+        match traffic to this LAN or to a network named in
+        routing.extra_local_networks.
+        """
+        if not self.drop_private:
+            return []
+        blocks = [ipaddress.ip_network(c) for c in
+                  ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+        keep = [self.lan] + [ipaddress.ip_network(c) for c in self.extra_local]
+        for local in keep:
+            out = []
+            for block in blocks:
+                if local.subnet_of(block):
+                    out.extend(block.address_exclude(local))
+                elif not block.subnet_of(local):
+                    out.append(block)
+            blocks = out
+        return [str(b) for b in sorted(blocks, key=lambda n: (n.network_address, n.prefixlen))]
 
 
 def load(path: str | pathlib.Path) -> Config:

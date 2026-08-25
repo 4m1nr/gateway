@@ -45,6 +45,12 @@ table inet gateway {
         comment "dropped at the gateway"
 {{ELEM_BLOCKED}}    }
 
+    set poisoned_dst {
+        type ipv4_addr
+        flags interval
+        comment "private space that is not local here — poisoned DNS answers"
+{{ELEM_POISONED}}    }
+
     set bypass_dst {
         type ipv4_addr
         flags interval
@@ -79,6 +85,13 @@ table inet gateway {
         # Anything else on loopback is genuinely local.
         iif lo return
 
+        # A filtering resolver answers blocked names with a private address, and
+        # the client then sends real traffic there. Treating all of RFC1918 as
+        # "local business" bypasses it into a black hole with no counter and no
+        # log — one site fails, everything else works, and nothing says why.
+        # The set excludes this LAN and routing.extra_local_networks, so it can
+        # only match an address that is genuinely unreachable from here.
+{{POISONED_RULE}}
         # LAN, tailnet, reserved space: local business, stays local
         ip daddr @bypass_dst return
 {{IPV6_PREROUTING}}
@@ -89,7 +102,7 @@ table inet gateway {
 
         # the interception itself (includes 100.64.0.0/10 when tailnet egress
         # is proxied, which is what puts exit-node traffic in the tunnel)
-        meta l4proto { tcp, udp } ip saddr @proxy_clients \
+        meta l4proto { tcp, udp } ip saddr @proxy_clients {{DNS_EXCLUDE}}\
             meta mark set $MARK_TPROXY tproxy ip to 127.0.0.1:$TPROXY_PORT accept
 
         # Neither of these ever forwards traffic through us, but they are inside
@@ -195,6 +208,7 @@ table inet gateway {
     }
 
     # --------------------------------------------------------------- nat ----
+{{DNS_INTERCEPT}}
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
 
