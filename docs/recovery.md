@@ -28,6 +28,33 @@ The watchdog restarts Xray after `restart_after_fails` probes on its own. If it
 has been down past `lifeline_after_min`, tailscaled is released to a direct path
 so you can still SSH in — `gw status` says `lifeline ENGAGED` when that happens.
 
+## The box itself has no internet
+
+This is the fail-closed design pointed at the gateway. Once
+`gw-network.service` is loaded, the OUTPUT chain marks the box's own traffic
+and policy-routes it to Xray — so if the tunnel is not carrying traffic, the
+box has no internet either. Only NTP and the bypass list get out. If AdGuard is
+also installed, `/etc/resolv.conf` points at it and its upstream DoH rides the
+same dead tunnel, so DNS goes with it.
+
+```bash
+sudo gw panic          # routing direct again, and DNS falls back to the router
+```
+
+Then work out which layer is broken:
+
+```bash
+gw status                                    # is the tunnel up?
+runuser -u xray -- curl -sS --max-time 10 https://api.ipify.org   # direct path
+curl -sS --max-time 15 --socks5-hostname 127.0.0.1:10808 https://api.ipify.org
+journalctl -u xray -n 40
+```
+
+`runuser -u xray` is the useful one: that uid is exempt from the OUTPUT chain,
+so it tests the box's real connectivity regardless of the tunnel. If it works
+and the SOCKS probe doesn't, the network is fine and Xray is the problem —
+check the clock first, then the outbound JSON against the server.
+
 ## You need the LAN working *now*
 
 ```bash
@@ -36,7 +63,9 @@ sudo gw panic
 
 Tears down interception and leaves plain NAT. Every client keeps working,
 **unproxied and with your real IP exposed** — it's a debugging mode, not a
-fallback. `sudo gw apply` restores normal operation.
+fallback. It also repoints `/etc/resolv.conf` at the router if local resolution
+is dead, keeping the old file at `/etc/resolv.conf.gw-bak`; `sudo gw apply`
+puts it back once AdGuard answers again.
 
 ## You can't reach the box at all
 
