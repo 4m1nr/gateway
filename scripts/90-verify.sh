@@ -13,6 +13,7 @@ while [ -L "$_self" ]; do
   _link="$(readlink "$_self")"
   case "$_link" in /*) _self="$_link" ;; *) _self="$(dirname "$_self")/$_link" ;; esac
 done
+# shellcheck source=lib/common.sh
 source "$(dirname "$_self")/../lib/common.sh"
 need_root
 [ -f /usr/local/lib/gateway/env ] \

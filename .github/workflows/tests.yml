@@ -17,7 +17,7 @@ jobs:
   suite:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install test dependencies
         run: |
@@ -69,23 +69,14 @@ jobs:
   shellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends shellcheck
 
-      - name: Errors (blocking)
+      - name: Lint shell
         run: |
-          # Error level only, so this gate stays trustworthy. These scripts run
-          # as root on a box that is someone's only route to the internet, so a
-          # real error here is worth stopping for.
-          shellcheck --severity=error --shell=bash \
-            bin/gw lib/common.sh scripts/*.sh templates/lib/*.sh tests/run.sh
-
-      - name: Warnings (advisory)
-        continue-on-error: true
-        run: |
-          # Not blocking yet: this codebase has never been linted, so the first
-          # run is a backlog rather than a regression. Triage these, fix them,
-          # then move --severity=warning into the blocking step above.
+          # Blocking at warning level. These scripts run as root on a box that
+          # is someone's only route to the internet — SC2221 already caught a
+          # case glob that installed root-owned job scripts world-readable.
           shellcheck --severity=warning --shell=bash \
             bin/gw lib/common.sh scripts/*.sh templates/lib/*.sh tests/run.sh

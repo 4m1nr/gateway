@@ -6,7 +6,7 @@
 # catches syntax and semantic errors (overlapping intervals, bad matches)
 # before they can take the LAN offline.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 export PYTHONPATH="$PWD/lib"
 
 PASS=0; FAIL=0
@@ -17,9 +17,24 @@ bad() { printf '  %s✗%s %s\n' "$c_red" "$c_off" "$*"; FAIL=$((FAIL+1)); }
 OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
 
 nft_check() {
-  if [ "$(id -u)" -eq 0 ]; then nft -c -f "$1" 2>&1
-  elif unshare -rn true 2>/dev/null; then unshare -rn nft -c -f "$1" 2>&1
-  else echo "SKIP"; fi
+  # `meta skuid "xray"` is resolved to a numeric uid when nft PARSES the file,
+  # so validating the ruleset verbatim only works on a machine where the
+  # gateway is already installed. On a CI runner or a contributor's laptop it
+  # fails with "User does not exist" — a fact about the environment, not a
+  # defect in the ruleset.
+  #
+  # Substitute a user that exists everywhere for the parse. The real username
+  # is still asserted separately by the loop-guard check below, so this cannot
+  # hide the rule going missing.
+  local src="$1" checked="$1.usercheck"
+  sed 's/meta skuid "xray"/meta skuid "root"/' "$src" > "$checked"
+
+  local out
+  if [ "$(id -u)" -eq 0 ]; then out=$(nft -c -f "$checked" 2>&1)
+  elif unshare -rn true 2>/dev/null; then out=$(unshare -rn nft -c -f "$checked" 2>&1)
+  else rm -f "$checked"; echo "SKIP"; return; fi
+  rm -f "$checked"
+  printf '%s' "$out"
 }
 
 echo "== valid fixtures =="
@@ -43,6 +58,15 @@ for f in tests/fixtures/*.toml; do
 
   # Shipping a ruleset without the kill switch would silently turn fail-closed
   # into fail-open, which is the one failure mode that must never regress.
+  # Job scripts run as root and may carry credentials; the generic
+  # gateway/*.sh case glob used to match them too and install them 755.
+  if [ -d "$OUT/$name/usr/local/lib/gateway/jobs" ]; then
+    badmode=$(find "$OUT/$name/usr/local/lib/gateway/jobs" -name '*.sh' \
+              ! -perm 700 -printf '%f ' 2>/dev/null)
+    if [ -z "$badmode" ]; then ok "$name: job scripts are 700"
+    else bad "$name: job scripts not 700: $badmode"; fi
+  fi
+
   if grep -q 'comment "killswitch"' "$OUT/$name/etc/nftables.d/gateway.nft"; then
     ok "$name: killswitch rule present"
   else bad "$name: KILLSWITCH RULE MISSING"; fi
@@ -176,6 +200,7 @@ import sys;sys.path.insert(0,'lib');import gwconfig
 print(gwconfig.load('$f').bootstrap_proxy)")
   # Source it, the way the helpers do — that also proves the file is
   # shell-safe, which an unquoted value with a space would not be.
+  # shellcheck disable=SC1090  # the path is a per-fixture build directory
   if envout=$( . "$envf" 2>/dev/null && printf '%s|%s|%s' \
                  "$GEO_URL_TEMPLATE" "$BOOTSTRAP_PROXY" "$GEO_FILES" ); then
     if [ "${envout%%|*}" = "$geo" ]; then
@@ -352,8 +377,12 @@ for tpl in outbounds/main.example.json outbounds/work.example.json; do
     bad "$tpl exists but is not tracked by git (check .gitignore negation)"
   else ok "$(basename "$tpl") present, valid and tracked"; fi
 done
-if ls outbounds/*.json >/dev/null 2>&1 && \
-   ls outbounds/*.json | grep -qv '\.example\.json$'; then
+stray=0
+for f in outbounds/*.json; do
+  [ -e "$f" ] || continue
+  case "$f" in *.example.json) ;; *) stray=1 ;; esac
+done
+if [ "$stray" -eq 1 ]; then
   bad "outbounds/ contains non-example .json files — real credentials do not belong in the repo working tree of a test run"
 else ok "no stray credential files in outbounds/"; fi
 

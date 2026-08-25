@@ -118,9 +118,13 @@ cmd_apply() {
     local rel="${staged#"$BUILD"/}"
     case "$rel" in adguard-overrides.json|tailscale-args) continue ;; esac
     local live="/$rel" mode=644
+    # Most specific first: a `*` in a case glob matches `/` too, so the
+    # generic gateway/*.sh pattern also matches gateway/jobs/*.sh and would
+    # install job scripts world-readable. They run as root and may hold
+    # credentials, so they are 700.
     case "$rel" in
-      usr/local/lib/gateway/*.sh|usr/local/lib/gateway/*.py) mode=755 ;;
       usr/local/lib/gateway/jobs/*.sh) mode=700 ;;
+      usr/local/lib/gateway/*.sh|usr/local/lib/gateway/*.py) mode=755 ;;
       etc/sudoers.d/*) mode=440 ;;
     esac
     install -D -m "$mode" "$staged" "$live"

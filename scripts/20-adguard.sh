@@ -12,16 +12,6 @@ done
 source "$(dirname "$_self")/../lib/common.sh"
 need_root
 
-VER=$(version_of adguard)
-SHA=$(sha_of adguard)
-ARCH=$(uname -m)
-case "$ARCH" in
-  x86_64)  ASSET=AdGuardHome_linux_amd64.tar.gz ;;
-  aarch64) ASSET=AdGuardHome_linux_arm64.tar.gz ;;
-  i686|i386) ASSET=AdGuardHome_linux_386.tar.gz ;;
-  *) die "unsupported architecture: $ARCH" ;;
-esac
-
 # Port 53 has to be free before AdGuard can bind it.
 if systemctl is-enabled systemd-resolved >/dev/null 2>&1; then
   info "disabling the systemd-resolved stub listener (it owns :53)"

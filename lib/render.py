@@ -381,10 +381,14 @@ def render(cfg: Config, out: pathlib.Path) -> list[str]:
         path = out / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
-        executable = rel in EXECUTABLE or rel.startswith(
-            "usr/local/lib/gateway/jobs/"
-        )
-        path.chmod(0o755 if executable else 0o644)
+        if rel.startswith("usr/local/lib/gateway/jobs/"):
+            # Job scripts run as root and may hold credentials.
+            mode = 0o700
+        elif rel in EXECUTABLE:
+            mode = 0o755
+        else:
+            mode = 0o644
+        path.chmod(mode)
         written.append(rel)
 
     # Not filesystem-shaped: consumed by `gw apply` at install time.
