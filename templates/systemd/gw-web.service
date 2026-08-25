@@ -1,0 +1,36 @@
+[Unit]
+Description=Gateway web dashboard
+After=network-online.target gw-network.service
+Wants=network-online.target
+PartOf=gateway.target
+
+[Service]
+Type=simple
+User=gwweb
+Group=gwweb
+Environment=PYTHONPATH={{REPO}}/lib
+ExecStart=/usr/bin/python3 {{REPO}}/lib/webapp.py
+Restart=always
+RestartSec=5
+
+# NoNewPrivileges MUST stay off: this service's entire privilege model is a
+# single sudo call to web-action.py, and NoNewPrivileges blocks setuid.
+NoNewPrivileges=false
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=false
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=gateway.target

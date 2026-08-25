@@ -113,6 +113,38 @@ interception *and* no kill switch. `journalctl -b -u gw-network` shows the nft
 error; it is almost always a ruleset referring to something that doesn't exist
 yet, such as the `xray` user.
 
+## The dashboard
+
+**"Your address is not permitted" (403).** You are outside `web.allow_cidrs`.
+It defaults to the LAN plus the tailnet. Note the packet also has to get past
+the firewall first, so a 403 means you reached the service — if you get a
+connection timeout instead, that is the nftables rule, not the app.
+
+**Every login fails, even with the right password.** Either no password is set
+(`sudo gw web-passwd`), or you are locked out — five failures per address
+locks that address for 15 minutes, and a correct password during the lockout
+is still refused. `journalctl -u gw-web` logs both cases.
+
+**"Could not check the password" (500).** The sudo grant is broken. The web
+process cannot verify anything on its own by design:
+
+```bash
+sudo -u gwweb sudo -n /usr/local/lib/gateway/web-action.py <<< '{"action":"auth_status"}'
+sudo visudo -cf /etc/sudoers.d/gw-web
+```
+
+**Buttons do nothing / 403 on every change.** A CSRF token mismatch, usually
+after `gw-web` restarted and invalidated sessions. Reload the page and sign in
+again.
+
+**Browser certificate warning.** Expected — the certificate is self-signed by
+`scripts/40-web.sh`. Accept it once, or reach the dashboard over Tailscale.
+
+**Apply fails from the dashboard but `gw apply` works in a shell.** The
+dashboard runs `gw apply` as root through the helper, so the difference is
+almost always a validation error surfaced in the returned output. Check
+`journalctl -u gw-web -n 50`.
+
 ## Tailscale can't connect
 
 If `route_control_via_xray = true`, tailscaled reaches the coordination server

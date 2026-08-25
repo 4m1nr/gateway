@@ -178,6 +178,40 @@ class Config:
         self.ts_route_control = bool(ts.get("route_control_via_xray", True))
         self.ts_lifeline_min = int(ts.get("lifeline_after_min", 10))
 
+        # ---- web ------------------------------------------------------------
+        w = raw.get("web", {})
+        self.web_enabled = bool(w.get("enabled", True))
+        self.web_listen = w.get("listen", "0.0.0.0")
+        self.web_port = int(w.get("port", 8088))
+        if not 1 <= self.web_port <= 65535:
+            raise ConfigError(f"web.port {self.web_port} is out of range")
+        if self.web_port in (self.dns_port, self.ui_port, self.tproxy_port,
+                             self.socks_port, self.http_port, self.api_port):
+            raise ConfigError(
+                f"web.port {self.web_port} collides with another gateway service"
+            )
+        self.web_tls = bool(w.get("tls", True))
+        self.web_cert = w.get("cert", "/etc/gateway/web.crt")
+        self.web_key = w.get("key", "/etc/gateway/web.key")
+        if self.web_tls and not (self.web_cert and self.web_key):
+            raise ConfigError("web.tls is on but web.cert/web.key are not set")
+
+        # Default to the LAN plus the tailnet: the dashboard can rewrite the
+        # firewall, so it is never reachable from anywhere by accident.
+        allow = w.get("allow_cidrs") or [self.lan_cidr, TAILNET_V4]
+        self.web_allow: list[str] = []
+        for c in allow:
+            net = _net(c, "web.allow_cidrs")
+            if net.prefixlen == 0:
+                raise ConfigError(
+                    "web.allow_cidrs contains 0.0.0.0/0, which would expose the "
+                    "dashboard to everything the box can reach. List real networks."
+                )
+            self.web_allow.append(str(net))
+        self.session_hours = int(w.get("session_hours", 12))
+        self.max_failed_logins = int(w.get("max_failed_logins", 5))
+        self.lockout_minutes = int(w.get("lockout_minutes", 15))
+
         # ---- health ---------------------------------------------------------
         h = raw.get("health", {})
         self.health_interval = int(h.get("interval_sec", 30))

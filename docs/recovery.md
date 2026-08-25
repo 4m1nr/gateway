@@ -66,6 +66,21 @@ sudo gw apply
 AdGuard's config is backed up on every merge to
 `/opt/AdGuardHome/AdGuardHome.yaml.bak`.
 
+## Locked out of the dashboard
+
+The lockout is in memory, so restarting the service clears it:
+
+```bash
+sudo systemctl restart gw-web     # clears lockouts and all sessions
+sudo gw web-passwd                # or set a new password
+```
+
+The dashboard is a convenience. Everything it does is available from the shell
+(`gw status`, `gw client`, `gw apply`), so losing access to it never blocks
+recovery. If you want it gone entirely, set `enabled = false` under `[web]` and
+run `sudo gw apply` — that removes the unit, the sudo grant and the firewall
+rule together.
+
 ## Stopping or restarting the stack
 
 ```bash

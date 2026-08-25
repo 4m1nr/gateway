@@ -46,7 +46,7 @@ outbound_mark   = 255
 tag        = "proxy"
 address    = "example.com"
 port       = 443
-uuid       = "00000000-0000-0000-0000-000000000000"
+uuid       = "11112222-3333-4444-5555-666677778888"
 encryption = "none"
 
 # Optional: pin the server's IP so Xray never needs DNS to reach it. Strongly
@@ -182,7 +182,7 @@ lifeline_after_min = 10
 #  ignored — nothing proxies this, so a header claiming otherwise is a lie.
 # ============================================================================
 [web]
-enabled = true
+enabled = false
 listen  = "0.0.0.0"
 port    = 8088
 

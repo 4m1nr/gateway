@@ -11,7 +11,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y --no-install-recommends \
   nftables iproute2 curl ca-certificates unzip jq \
-  chrony python3 python3-yaml \
+  chrony python3 python3-yaml openssl sudo \
   ethtool tcpdump dnsutils mtr-tiny vnstat \
   zram-tools unattended-upgrades
 

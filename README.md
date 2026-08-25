@@ -33,6 +33,7 @@ sudo scripts/00-bootstrap.sh # base system, static IP, clock, logging
 sudo scripts/10-xray.sh      # tunnel, verified over SOCKS before anything is intercepted
 sudo scripts/20-adguard.sh   # LAN DNS
 sudo scripts/30-tailscale.sh # subnet router + exit node
+sudo scripts/40-web.sh       # dashboard (creates the service user + cert)
 sudo scripts/50-hardening.sh # ssh, unattended upgrades, timers
 sudo gw check                # prove the whole path end to end
 ```
@@ -86,6 +87,7 @@ See `docs/per-client-policy.md`.
 | `gw check` | end-to-end verification incl. leak tests |
 | `gw check --killswitch` | also prove traffic dies rather than leaking |
 | `gw client` | `list` / `add <ip> <name> <policy>` / `rm <ip>` |
+| `gw web-passwd` | set the dashboard password |
 | `gw update` | binaries, geodata, blocklists, then re-apply |
 | `gw panic` | drop to plain NAT so the LAN works while you debug |
 | `gw logs` | follow every relevant journal at once |
@@ -93,6 +95,43 @@ See `docs/per-client-policy.md`.
 `gw apply` validates the nftables ruleset (`nft -c`) and the Xray config
 (`xray -test`) **before** reloading anything. A config that would break the
 gateway is refused rather than half-applied.
+
+## Web dashboard
+
+`https://<box>:8088` — tunnel state, services, per-route traffic, an on-demand
+exit-IP check, and client management with an Apply button.
+
+```bash
+sudo scripts/40-web.sh    # service user, self-signed cert, firewall rule
+sudo gw web-passwd        # scrypt-hashed, stored outside the repo
+```
+
+It can rewrite the firewall, so it is fenced three independent ways:
+
+1. **Source address** — nftables only accepts the port from `web.allow_cidrs`
+   (default: your LAN plus the tailnet), and the app re-checks the peer itself.
+   The address comes from the socket; `X-Forwarded-For` is ignored, because
+   nothing proxies this service and a header claiming otherwise can only be a
+   forgery.
+2. **Password** — scrypt, with a per-address lockout after
+   `max_failed_logins`. Sessions are bound to the address that created them, so
+   a stolen cookie is not portable.
+3. **Privilege separation** — the web process runs as `gwweb` and can do
+   nothing on its own. Every privileged action is a JSON request piped to a
+   single sudo entry point, `web-action.py`, which re-validates every field as
+   root. The sudo grant is that one command with no arguments and no wildcards,
+   so a compromised web process cannot ask for anything the helper does not
+   already implement. The password hash is `0600 root:root` and the web process
+   never reads it — logins are verified across the same boundary.
+
+TLS is on by default with a self-signed certificate; your browser warns once.
+That stops the password crossing the LAN in clear text, but a LAN attacker
+could still substitute their own certificate and you would click through — if
+that matters, reach the dashboard over Tailscale instead.
+
+`http.server` is not a hardened internet-facing server, and this is not exposed
+to the internet. Keep it that way: don't port-forward it, and don't widen
+`allow_cidrs` to `0.0.0.0/0` (the loader refuses that anyway).
 
 ## Starting on boot
 
@@ -201,8 +240,8 @@ gateway.toml          the source of truth (gitignored)
 gateway.example.toml  documented template
 versions.toml         pinned Xray / AdGuard versions + checksums
 bin/gw                the CLI
-lib/                  config model, renderers (Python 3, stdlib only)
-templates/            nftables, systemd units, helper scripts
+lib/                  config model, renderers, dashboard (Python 3, stdlib only)
+templates/            nftables, systemd units, helper scripts, web assets
 scripts/              ordered, idempotent install steps
 build/                rendered output, mirrors the target filesystem
 tests/run.sh          offline suite — validates every ruleset with real `nft -c`

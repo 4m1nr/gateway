@@ -11,6 +11,7 @@
 #   gw status        what is running and whether the tunnel is up
 #   gw check         end-to-end verification, including leak tests
 #   gw client        add/remove/list per-client policy
+#   gw web-passwd    set the dashboard password
 #   gw update        binaries, geodata, blocklists
 #   gw panic         disable interception, plain NAT, keep the LAN online
 #   gw logs          follow the relevant journals
@@ -26,7 +27,7 @@ AGH_YAML=/opt/AdGuardHome/AdGuardHome.yaml
 # gateway.target is the umbrella; the rest are its members. tailscaled is
 # deliberately absent — it is Wanted by the target but not PartOf it, so
 # restarting the stack cannot drop the session you are managing it over.
-STACK=(gateway.target gw-network.service xray.service gw-health.timer gw-geoupdate.timer)
+STACK=(gateway.target gw-network.service xray.service gw-web.service gw-health.timer gw-geoupdate.timer)
 NFT_LIVE=/etc/nftables.d/gateway.nft
 
 c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
@@ -87,12 +88,23 @@ cmd_apply() {
     local rel="${staged#"$BUILD"/}"
     case "$rel" in adguard-overrides.json|tailscale-args) continue ;; esac
     local live="/$rel" mode=644
-    case "$rel" in usr/local/lib/gateway/*.sh) mode=755 ;; esac
+    case "$rel" in
+      usr/local/lib/gateway/*.sh|usr/local/lib/gateway/*.py) mode=755 ;;
+      etc/sudoers.d/*) mode=440 ;;
+    esac
     install -D -m "$mode" "$staged" "$live"
   done < <(find "$BUILD" -type f -print0)
 
   info "applying sysctl"
   sysctl --system >/dev/null
+
+  if [ -f "$BUILD/etc/sudoers.d/gw-web" ]; then
+    info "validating the sudoers fragment"
+    # A syntax error in /etc/sudoers.d can make sudo refuse to run at all, so
+    # this is checked before it is anywhere near /etc.
+    visudo -cf "$BUILD/etc/sudoers.d/gw-web" >/dev/null \
+      || die "generated sudoers file is invalid — refusing to install it"
+  fi
 
   info "validating the ruleset before loading it"
   nft -c -f "$NFT_LIVE" || die "nftables ruleset rejected — nothing was reloaded"
@@ -147,7 +159,21 @@ cmd_apply() {
 # by enabling each member, and the target's Wants= only pulls in units that
 # exist. Enabling both is what makes a cold boot come up complete.
 enable_stack() {
-  systemctl enable "${STACK[@]}" >/dev/null 2>&1 \
+  # Only enable what is actually installed: gw-web.service is absent when the
+  # dashboard is disabled, and `systemctl enable` on a missing unit fails the
+  # whole call.
+  local units=()
+  local u
+  for u in "${STACK[@]}"; do
+    if [ -f "/etc/systemd/system/$u" ]; then
+      units+=("$u")
+    fi
+  done
+  if [ "${#units[@]}" -eq 0 ]; then
+    warn "no gateway units are installed yet"
+    return 0
+  fi
+  systemctl enable "${units[@]}" >/dev/null 2>&1 \
     || warn "some units could not be enabled — check 'systemctl status gateway.target'"
   # AdGuard installs its own unit; ours is a drop-in on top of it.
   if systemctl cat AdGuardHome.service >/dev/null 2>&1; then
@@ -239,6 +265,13 @@ cmd_status() {
     printf 'firewall    %snot loaded%s\n' "$c_red" "$c_off"
   fi
 
+  if [ -f /etc/gateway/web.json ]; then
+    local wport wscheme
+    wport=$(sed -n 's/.*"port": *\([0-9]*\).*/\1/p' /etc/gateway/web.json)
+    wscheme=http; grep -q '"tls": *true' /etc/gateway/web.json && wscheme=https
+    printf 'dashboard   %s://%s:%s\n' "$wscheme" "$(sed -n 's/^BOX_IP=//p' /usr/local/lib/gateway/env)" "$wport"
+  fi
+
   command -v tailscale >/dev/null && tailscale status --peers=false 2>/dev/null | head -3 || true
 }
 
@@ -247,6 +280,12 @@ cmd_check() { need_root check; "$REPO/scripts/90-verify.sh" "$@"; }
 
 # ---------------------------------------------------------------- client ----
 cmd_client() { $PY "$REPO/lib/clients.py" "$CONFIG" "$@"; }
+
+# ------------------------------------------------------------- web-passwd ----
+cmd_web_passwd() {
+  need_root web-passwd
+  $PY "$REPO/lib/web_passwd.py"
+}
 
 # ----------------------------------------------------------------- init ----
 cmd_init() { $PY "$REPO/lib/init.py" "$REPO" "$CONFIG" "$@"; }
@@ -298,6 +337,7 @@ case "${1:-}" in
   status) shift; cmd_status "$@" ;;
   check)  shift; cmd_check "$@" ;;
   client) shift; cmd_client "$@" ;;
+  web-passwd) shift; cmd_web_passwd "$@" ;;
   init)   shift; cmd_init "$@" ;;
   update) shift; cmd_update "$@" ;;
   panic)  shift; cmd_panic "$@" ;;

@@ -170,6 +170,38 @@ route_control_via_xray = true
 lifeline_after_min = 10
 
 # ============================================================================
+#  Web dashboard
+#
+#  Status + client management, served by the box itself. Three independent
+#  gates, because this thing can change the firewall:
+#    1. nftables only accepts the port from allow_cidrs
+#    2. the app re-checks the peer address against allow_cidrs
+#    3. a password (set with `gw web-passwd`, scrypt-hashed outside the repo)
+#
+#  The peer address comes from the socket. X-Forwarded-For is deliberately
+#  ignored — nothing proxies this, so a header claiming otherwise is a lie.
+# ============================================================================
+[web]
+enabled = true
+listen  = "0.0.0.0"
+port    = 8088
+
+# Self-signed by default (scripts/40-web.sh generates it). Your browser will
+# warn once. It is worth it: the login password crosses the LAN otherwise.
+# A LAN attacker can still substitute their own cert and you would click
+# through — reach it over Tailscale if that matters to you.
+tls  = true
+cert = "/etc/gateway/web.crt"
+key  = "/etc/gateway/web.key"
+
+# Who may reach the dashboard at all. Empty = lan_cidr + the tailnet.
+allow_cidrs = []
+
+session_hours     = 12
+max_failed_logins = 5
+lockout_minutes   = 15
+
+# ============================================================================
 #  Health watchdog
 # ============================================================================
 [health]

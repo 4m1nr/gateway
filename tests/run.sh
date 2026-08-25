@@ -108,6 +108,64 @@ print(gwconfig.load('$f').default_policy)")
     ok "$name: box and router excluded from the catch-all"
   else bad "$name: box/router not excluded — the catch-all can capture them"; fi
 
+  # ---- web dashboard ----
+  web=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print('yes' if gwconfig.load('$f').web_enabled else 'no')")
+  sudoers="$OUT/$name/etc/sudoers.d/gw-web"
+  if [ "$web" = yes ]; then
+    if [ -f "$sudoers" ] && [ -f "$units/gw-web.service" ] \
+       && [ -f "$OUT/$name/usr/local/share/gateway/web/app.js" ]; then
+      ok "$name: dashboard rendered"
+    else bad "$name: web is enabled but the dashboard was not fully rendered"; fi
+
+    # The sudo grant is the dashboard's whole privilege surface. A wildcard
+    # here would let a compromised web process run arbitrary gw subcommands.
+    if grep -qE '^gwweb .*NOPASSWD: */usr/local/lib/gateway/web-action\.py *$' "$sudoers"; then
+      ok "$name: sudoers grants exactly one command, no arguments"
+    else bad "$name: sudoers grant is not the single web-action.py entry"; fi
+    if grep -qE 'NOPASSWD:.*[*]' "$sudoers"; then
+      bad "$name: SUDOERS CONTAINS A WILDCARD"
+    else ok "$name: no wildcard in the sudo grant"; fi
+    if command -v visudo >/dev/null; then
+      visudo -cf "$sudoers" >/dev/null 2>&1 \
+        && ok "$name: sudoers parses" || bad "$name: sudoers does NOT parse"
+    fi
+
+    # sudo needs setuid, so this one hardening knob has to stay off; asserting
+    # it stops a future "tighten the unit" change from silently breaking auth.
+    if grep -q '^NoNewPrivileges=false' "$units/gw-web.service"; then
+      ok "$name: gw-web keeps NoNewPrivileges off (sudo needs it)"
+    else bad "$name: gw-web sets NoNewPrivileges=true — sudo will fail"; fi
+
+    # web.json is world-readable, so the real question is whether any actual
+    # secret leaked into it. ("key" appears legitimately as a TLS key *path*.)
+    uuid=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print(gwconfig.load('$f').server['uuid'])")
+    if grep -qF "$uuid" "$OUT/$name/etc/gateway/web.json"; then
+      bad "$name: the Xray UUID leaked into world-readable web.json"
+    elif grep -qiE '"(password|hash|salt|uuid|secret)" *:' "$OUT/$name/etc/gateway/web.json"; then
+      bad "$name: web.json contains a secret-looking field"
+    else ok "$name: no credentials in world-readable web.json"; fi
+
+    # Same question for the assets the browser downloads.
+    if grep -rqF "$uuid" "$OUT/$name/usr/local/share/gateway/web/"; then
+      bad "$name: the Xray UUID leaked into a served web asset"
+    else ok "$name: no credentials in the served assets"; fi
+
+    port=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print(gwconfig.load('$f').web_port)")
+    if grep -q "tcp dport $port accept" "$nftf"; then
+      ok "$name: dashboard port firewalled to allow_cidrs"
+    else bad "$name: no nftables rule for the dashboard port"; fi
+  else
+    if [ -f "$sudoers" ] || [ -f "$units/gw-web.service" ]; then
+      bad "$name: web is disabled but dashboard files were still rendered"
+    else ok "$name: web disabled — no dashboard, no sudoers grant"; fi
+  fi
+
   # tailscaled must NOT be PartOf: restarting the stack would drop the session
   # you are almost certainly using to manage the box.
   if grep -q '^PartOf=gateway.target' "$units/AdGuardHome.service.d/gw.conf" 2>/dev/null \

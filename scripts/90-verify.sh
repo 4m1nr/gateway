@@ -171,6 +171,44 @@ if curl -6 -fsS --max-time 5 https://api64.ipify.org >/dev/null 2>&1; then
   bad "the box has working IPv6 egress — that path is not proxied"
 else ok "no IPv6 egress"; fi
 
+# -------------------------------------------------------------- dashboard --
+sec "web dashboard"
+if [ ! -f /etc/gateway/web.json ]; then
+  skip "dashboard not installed"
+else
+  WPORT=$(python3 -c "import json;print(json.load(open('/etc/gateway/web.json'))['port'])")
+  WTLS=$(python3 -c "import json;print(json.load(open('/etc/gateway/web.json'))['tls'])")
+  systemctl is-active --quiet gw-web && ok "gw-web is running" || bad "gw-web is not running"
+
+  if [ -f /etc/gateway/web-auth.json ]; then
+    perms=$(stat -c '%a %U:%G' /etc/gateway/web-auth.json)
+    if [ "$perms" = "600 root:root" ]; then
+      ok "password hash is 0600 root:root (the web process cannot read it)"
+    else bad "password hash is $perms — expected 600 root:root"; fi
+  else
+    bad "no dashboard password set — every login will fail (run: sudo gw web-passwd)"
+  fi
+
+  # The sudo grant is the dashboard's entire privilege surface.
+  if grep -qE 'NOPASSWD:.*[*]' /etc/sudoers.d/gw-web 2>/dev/null; then
+    bad "/etc/sudoers.d/gw-web contains a wildcard — it should grant exactly one command"
+  else ok "sudo grant is a single command with no wildcard"; fi
+  owner=$(stat -c '%U' /usr/local/lib/gateway/web-action.py 2>/dev/null)
+  if [ "$owner" = "root" ]; then
+    ok "the privileged helper is owned by root"
+  else bad "web-action.py is owned by $owner — gwweb could rewrite what it sudoes"; fi
+
+  # Gate 1: the port must not be open to the whole world.
+  if nft list chain inet gateway input 2>/dev/null | grep -q "dport $WPORT accept"; then
+    if nft list chain inet gateway input | grep "dport $WPORT" | grep -q "saddr"; then
+      ok "dashboard port $WPORT is restricted by source address"
+    else bad "dashboard port $WPORT is accepted from ANY source"; fi
+  else bad "no firewall rule for the dashboard port"; fi
+
+  [ "$WTLS" = "True" ] && ok "dashboard uses TLS" \
+    || bad "dashboard is plain HTTP — the login password crosses the LAN in clear text"
+fi
+
 # -------------------------------------------------------------- tailscale --
 sec "tailscale"
 if command -v tailscale >/dev/null && tailscale status >/dev/null 2>&1; then

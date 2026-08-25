@@ -147,7 +147,7 @@ table inet gateway {
 
         # DNS for the LAN (AdGuard Home)
         ip saddr $LAN meta l4proto { tcp, udp } th dport {{DNS_PORT}} accept
-{{INPUT_SSH}}{{INPUT_UI}}
+{{INPUT_SSH}}{{INPUT_UI}}{{INPUT_WEB}}
         counter comment "dropped-input"
     }
 
