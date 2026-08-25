@@ -455,12 +455,30 @@ cmd_diag() {
   probe_dst=1.1.1.1
   if [ -n "$client" ]; then
     printf '  forward (marked, as after tproxy):\n'
-    ip route get "$probe_dst" from "$client" iif "$wan" mark 1 2>&1 | sed 's/^/    /'
-    # This is the lookup that validates the reverse path, and it runs with
-    # mark 0 — so it ignores our fwmark rule and can land in another table.
-    printf '  reverse (rp_filter, mark 0):\n'
-    ip route get "$client" from "$probe_dst" 2>&1 | sed 's/^/    /'
+    local fwd
+    # `|| true` matters: this command failing is a RESULT, not an error, and
+    # under `set -e` it would otherwise abort the rest of the report.
+    fwd=$(ip route get "$probe_dst" from "$client" iif "$wan" mark 1 2>&1 || true)
+    printf '%s\n' "$fwd" | sed 's/^/    /'
+    case "$fwd" in
+      *"Invalid argument"*)
+        printf '    %s^ EINVAL here means MARTIAN SOURCE: the kernel rejects this\n' "$c_red"
+        printf '      client during reverse-path validation, which is exactly\n'
+        printf '      where intercepted packets disappear.%s\n' "$c_off" ;;
+      *"local "*) printf '    %s^ good: delivered locally, which is what TPROXY needs%s\n' "$c_grn" "$c_off" ;;
+    esac
+
+    # The lookup that validates the reverse path. It runs with mark 0, so it
+    # ignores our fwmark rule and can land in another table entirely.
+    printf '  reverse (validation, mark 0):\n'
+    ip route get "$client" from "$probe_dst" 2>&1 | sed 's/^/    /' || true
   fi
+
+  printf '  routing tables in play:\n'
+  for tbl in $(ip rule list | sed -n 's/.*lookup \([a-z0-9]*\).*/\1/p' | sort -u); do
+    printf '    table %s: %s\n' "$tbl" \
+      "$(ip route show table "$tbl" 2>/dev/null | tr '\n' '|' | cut -c1-120)"
+  done
 
   printf '  rp_filter:'
   for f in /proc/sys/net/ipv4/conf/*/rp_filter; do

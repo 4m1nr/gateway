@@ -506,9 +506,23 @@ if grep -q 'for f in /proc/sys/net/ipv4/conf/\*/rp_filter' templates/lib/ip-rule
 else
   bad "ip-rules.sh only sets rp_filter for some interfaces — later ones (tailscale0) will keep the default"
 fi
-if grep -q 'reverse (rp_filter, mark 0)' bin/gw; then
+if grep -q 'reverse (validation, mark 0)' bin/gw; then
   ok "gw diag shows the reverse-path lookup"
 else bad "gw diag does not show the reverse-path lookup"; fi
+
+# The reverse lookup must resolve in main, ahead of Tailscale's catch-all rule
+# at priority 5270, or validation can reject LAN clients as martians.
+if grep -q 'ip rule add to "$LAN_CIDR" lookup main pref 90' templates/lib/ip-rules.sh; then
+  ok "reverse-path lookups for the LAN are pinned to the main table"
+else
+  bad "no rule pinning LAN reverse-path lookups to main — another table can claim them"
+fi
+
+# A failing probe inside gw diag is a result, not an error; under set -e an
+# unguarded failure aborted the rest of the report, hiding the data.
+if grep -q 'ip route get "$probe_dst" from "$client" iif "$wan" mark 1 2>&1 || true' bin/gw; then
+  ok "gw diag survives a failing route probe"
+else bad "gw diag aborts when a route probe fails"; fi
 
 echo
 echo "== sbin tools are reachable regardless of the caller's PATH =="

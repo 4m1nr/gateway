@@ -28,9 +28,33 @@ case "${1:-up}" in
     for f in /proc/sys/net/ipv4/conf/*/rp_filter; do
       [ -w "$f" ] && echo 0 > "$f" 2>/dev/null || true
     done
+
+    # Resolve the reverse path for LAN sources in the main table.
+    #
+    # Before delivering a TPROXY packet locally the kernel validates its
+    # reverse path: it looks up a route back to the SOURCE, with mark 0. That
+    # skips the fwmark rule above and falls into whatever else matches —
+    # Tailscale installs "from all lookup 52" at priority 5270. If that table
+    # answers with anything that is not a plain unicast route, validation
+    # returns -EINVAL, the packet is treated as a martian, and it is dropped
+    # between prerouting and the input chain with no counter anywhere.
+    #
+    # Sitting at priority 90, ahead of Tailscale's, this sends the reverse
+    # lookup for our own LAN to the main table, where it resolves to the real
+    # interface. It changes nothing about where traffic goes: main already
+    # routes the LAN over that interface.
+    ip rule list | grep -q "to $LAN_CIDR lookup main" \
+      || ip rule add to "$LAN_CIDR" lookup main pref 90
+
+    # Belt and braces: with rp_filter off, accept_local makes the kernel skip
+    # that reverse lookup entirely rather than depend on how it resolves.
+    for f in /proc/sys/net/ipv4/conf/*/accept_local; do
+      [ -w "$f" ] && echo 1 > "$f" 2>/dev/null || true
+    done
     ;;
   down)
     ip rule del fwmark "$MARK_TPROXY" lookup "$RT_TABLE" pref 100 2>/dev/null || true
+    ip rule del to "$LAN_CIDR" lookup main pref 90 2>/dev/null || true
     ip route flush table "$RT_TABLE" 2>/dev/null || true
     ;;
   status)
