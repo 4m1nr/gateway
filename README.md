@@ -78,10 +78,8 @@ normal path:
 
 ```toml
 [[upstream]]                       # a second Xray server
-name    = "work"
-address = "vpn.work.example"
-uuid    = "..."
-path    = "/xhttp"
+name = "work"
+file = "outbounds/work.json"       # a full Xray outbound object
 
 [[profile]]
 name = "work-laptop"
@@ -213,6 +211,51 @@ LAN.
 `gw check` verifies boot configuration as a separate section — "it works right
 now" and "it comes back after a power cut" are different claims.
 
+## Outbounds are Xray's own JSON
+
+Every server — the main tunnel, the fallback, and each profile upstream — is a
+**complete Xray outbound object**, used verbatim:
+
+```toml
+[xray.outbound]
+file = "outbounds/main.json"       # or: json = """ { ... } """
+server_ip = ""                     # optional: pin the IP, skip DNS at boot
+```
+
+```json
+{
+  "protocol": "vless",
+  "settings": { "vnext": [ { "address": "example.com", "port": 443,
+    "users": [ { "id": "...", "encryption": "none" } ] } ] },
+  "streamSettings": {
+    "network": "xhttp", "security": "tls",
+    "tlsSettings": { "serverName": "example.com", "alpn": ["h2"] },
+    "xhttpSettings": { "host": "example.com", "path": "/xhttp", "mode": "auto" }
+  }
+}
+```
+
+The gateway does not model protocols or transports, so anything Xray supports
+works — VLESS/XHTTP, Reality, Trojan, Shadowsocks, a chained outbound — without
+this repo needing to learn about it. `gw init` still writes the file for you
+from a `vless://` share link.
+
+Two fields are always overridden, because the gateway depends on them and
+nobody writing an outbound by hand would include them:
+
+| field | why |
+|---|---|
+| `tag` | routing rules reference outbounds by name |
+| `streamSettings.sockopt.mark` | the loop guard — an outbound without it makes Xray's own packets eligible for TPROXY, and the box deadlocks the moment interception is enabled |
+
+A mark that conflicts with `xray.outbound_mark` is rejected at load rather than
+silently overwritten, and `tests/check_outbounds.py` asserts that every
+generated outbound is tagged and marked. That is the highest-consequence check
+in the suite.
+
+Credentials live in `outbounds/*.json`, which is gitignored — only
+`*.example.json` is committed.
+
 ## How it works
 
 Two layers decide what happens to a packet:
@@ -276,13 +319,14 @@ when you need it. Client traffic stays fail-closed regardless.
 ```
 gateway.toml          the source of truth (gitignored)
 gateway.example.toml  documented template
+outbounds/*.json      Xray outbound objects, used verbatim (gitignored)
 versions.toml         pinned Xray / AdGuard versions + checksums
 bin/gw                the CLI
 lib/                  config model, renderers, dashboard (Python 3, stdlib only)
 templates/            nftables, systemd units, helper scripts, web assets
 scripts/              ordered, idempotent install steps
 build/                rendered output, mirrors the target filesystem
-tests/run.sh          offline suite — validates every ruleset with real `nft -c`
+tests/run.sh          offline suite — real `nft -c`, outbound and routing invariants
 docs/                 recovery, troubleshooting, per-client policy
 ```
 

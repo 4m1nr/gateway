@@ -4,3 +4,8 @@ build/
 secrets/
 *.bak
 __pycache__/
+
+# Outbound definitions hold server credentials — only the *.example.json
+# templates are committed.
+outbounds/*.json
+!outbounds/*.example.json

@@ -1,0 +1,33 @@
+{
+  "protocol": "vless",
+  "settings": {
+    "vnext": [
+      {
+        "address": "example.com",
+        "port": 443,
+        "users": [
+          {
+            "id": "11112222-3333-4444-5555-666677778888",
+            "encryption": "none"
+          }
+        ]
+      }
+    ]
+  },
+  "streamSettings": {
+    "network": "xhttp",
+    "security": "reality",
+    "xhttpSettings": {
+      "host": "example.com",
+      "path": "/xhttp",
+      "mode": "auto"
+    },
+    "realitySettings": {
+      "serverName": "example.com",
+      "fingerprint": "chrome",
+      "publicKey": "gTestPublicKeyValue123",
+      "shortId": "",
+      "spiderX": "/"
+    }
+  }
+}

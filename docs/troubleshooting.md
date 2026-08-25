@@ -10,19 +10,23 @@ both fail on skew and the symptom looks exactly like a broken tunnel or wrong
 credentials. NTP is pinned to a direct path precisely so this is fixable
 without the tunnel.
 
-Then the XHTTP parameters. They must match the server exactly:
-
-| `gateway.toml` | must match the server's |
-|---|---|
-| `path` | XHTTP path |
-| `host` | `Host` header the server/CDN expects |
-| `mode` | `auto` / `packet-up` / `stream-up` / `stream-one` |
-| `alpn` | what the fronting proxy negotiates |
-| `sni` | certificate name |
+Then the outbound itself. `outbounds/main.json` is passed to Xray verbatim, so
+compare it against what the server expects — for XHTTP that means `path`,
+`host`, `mode`, `alpn` and `serverName`.
 
 `journalctl -u xray -n 50` shows the handshake failure. A CDN or reverse proxy
 in front of the server that doesn't pass the path through unchanged is a common
 cause; so is `h2` in `alpn` when the front only speaks HTTP/1.1.
+
+Because the outbound is plain Xray JSON, you can test it in isolation: copy it
+into a minimal config with a SOCKS inbound and run
+`xray run -c /tmp/test.json` by hand. If it fails there too, the problem is the
+outbound, not the gateway.
+
+**"sockopt.mark is N, but the firewall exempts 255".** Your outbound sets its
+own mark. The gateway needs that exact value to recognise Xray's own packets and
+keep them out of TPROXY; a different one deadlocks the box. Remove the field —
+the gateway adds it — or change `xray.outbound_mark` to match.
 
 ## First packet works, then the connection hangs
 

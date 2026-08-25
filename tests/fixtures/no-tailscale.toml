@@ -39,62 +39,48 @@ domain_strategy = "IPIfNonMatch"
 # marking rule. Changing this means changing the nftables rule too.
 outbound_mark   = 255
 
-# Your existing XHTTP server. From a vless:// link:
-#   vless://<uuid>@<address>:<port>?type=xhttp&path=<path>&host=<host>
-#                                  &security=tls&sni=<sni>&fp=chrome&mode=auto
-[xray.server]
-tag        = "proxy"
-address    = "example.com"
-port       = 443
-uuid       = "11112222-3333-4444-5555-666677778888"
-encryption = "none"
+# The primary outbound: a complete Xray outbound object, used verbatim.
+#
+# The gateway does not model protocols or transports — paste whatever Xray
+# supports (VLESS/XHTTP, Reality, Trojan, Shadowsocks, a chain, ...). Two
+# fields are always overridden, because the gateway depends on them:
+#
+#   tag             routing rules reference it
+#   sockopt.mark    the loop guard; without it Xray's own packets are
+#                   re-captured by TPROXY and the gateway deadlocks
+#
+# `gw init` writes this file for you from a vless:// share link.
+[xray.outbound]
+file = "outbounds/main.json"          # or: json = """ { ... } """
 
-# Optional: pin the server's IP so Xray never needs DNS to reach it. Strongly
-# recommended when the address is a bare domain — removes a boot-time
-# chicken-and-egg (DNS needs the tunnel, the tunnel needs DNS).
-# Leave empty for a CDN-fronted host, whose IP legitimately rotates.
-resolved_ip = "203.0.113.10"
+# Optional. Pins the server's address so the tunnel never needs DNS to come up
+# — otherwise that is a real boot-time chicken-and-egg. Leave empty for a
+# CDN-fronted host whose IP legitimately rotates.
+server_ip = "203.0.113.10"
 
-# --- XHTTP transport ---
-path        = "/xhttp"
-host        = ""          # empty = use `address`
-mode        = "auto"      # auto | packet-up | stream-up | stream-one
-x_padding   = ""          # xPaddingBytes, e.g. "100-1000"; empty = Xray default
+# Only needed when the address cannot be read out of the outbound automatically
+# (unusual protocols). It is what gets resolved via a direct resolver.
+# server_domain = ""
 
-# --- Security layer ---
-security    = "tls"       # tls | reality | none
-sni         = ""          # empty = use `address`
-fingerprint = "chrome"
-alpn        = ["h2", "http/1.1"]
-allow_insecure = false
-# reality only:
-public_key  = ""
-short_id    = ""
-spider_x    = "/"
-
-# Optional second server. When enabled, Xray load-balances with a burst
+# Optional second outbound. When enabled, Xray load-balances with a burst
 # observatory so a dead server fails over instead of taking you offline.
 [xray.fallback]
 enabled = false
-# Same keys as [xray.server].
+# file      = "outbounds/backup.json"
+# server_ip = ""
 
 # ============================================================================
 #  Extra upstreams
 #
 #  More Xray servers that profiles can send selected traffic through — a work
-#  VPN, a second exit country. Same fields as [xray.server]. `name` becomes an
-#  outbound tag, so keep it to lowercase letters, digits and dashes.
+#  VPN, a second exit country. Same form as [xray.outbound]: a complete Xray
+#  outbound object, used verbatim. `name` becomes the outbound tag, so keep it
+#  to lowercase letters, digits and dashes.
 # ============================================================================
 # [[upstream]]
-# name        = "work"
-# address     = "vpn.work.example"
-# port        = 443
-# uuid        = "..."
-# path        = "/xhttp"
-# mode        = "auto"
-# security    = "tls"
-# sni         = "vpn.work.example"
-# fingerprint = "chrome"
+# name      = "work"
+# file      = "outbounds/work.json"
+# server_ip = ""
 
 # ============================================================================
 #  Profiles

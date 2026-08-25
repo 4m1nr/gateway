@@ -1,8 +1,12 @@
 """Build the Xray config from gateway.toml.
 
-Xray's config is JSON with conditional blocks and generated arrays, so this is
-a builder rather than a text template — string-templating JSON is how you end
-up shipping a gateway that won't start.
+Upstream outbounds are taken verbatim from the config — the gateway does not
+model protocols or transports, so anything Xray supports works. It only owns
+the tag (routing references it) and sockopt.mark (the loop guard), both
+enforced in gwconfig when the outbound is loaded.
+
+Everything else here — inbounds, DNS, routing — is generated, because it is
+derived from the rest of gateway.toml rather than supplied.
 """
 
 from __future__ import annotations
@@ -12,76 +16,35 @@ import json
 from gwconfig import Config
 
 
-def _stream(s: dict, mark: int) -> dict:
-    """streamSettings for one XHTTP server, including the SO_MARK that keeps
-    Xray's own packets out of the OUTPUT marking rule."""
-    xhttp = {
-        "host": s["host"],
-        "path": s["path"],
-        "mode": s["mode"],
-    }
-    if s["x_padding"]:
-        xhttp["xPaddingBytes"] = s["x_padding"]
-
-    stream = {
-        "network": "xhttp",
-        "security": s["security"],
-        "xhttpSettings": xhttp,
-        # THE loop guard. Every packet Xray sends carries this mark; the
-        # nftables output chain returns early on it. Without this, Xray's own
-        # traffic is re-captured by TPROXY and the box wedges instantly.
-        "sockopt": {"mark": mark, "tcpFastOpen": True, "domainStrategy": "UseIPv4"},
-    }
-
-    if s["security"] == "tls":
-        stream["tlsSettings"] = {
-            "serverName": s["sni"],
-            "fingerprint": s["fingerprint"],
-            "alpn": s["alpn"],
-            "allowInsecure": s["allow_insecure"],
-        }
-    elif s["security"] == "reality":
-        stream["realitySettings"] = {
-            "serverName": s["sni"],
-            "fingerprint": s["fingerprint"],
-            "publicKey": s["public_key"],
-            "shortId": s["short_id"],
-            "spiderX": s["spider_x"],
-        }
-    return stream
-
-
-def _outbound(s: dict, mark: int, tag: str) -> dict:
-    return {
-        "tag": tag,
-        "protocol": "vless",
-        "settings": {
-            "vnext": [
-                {
-                    "address": s["address"],
-                    "port": s["port"],
-                    "users": [{"id": s["uuid"], "encryption": s["encryption"]}],
-                }
-            ]
-        },
-        "streamSettings": _stream(s, mark),
-    }
+def _is_ip(value: str) -> bool:
+    import ipaddress
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 
 def _dns(cfg: Config) -> dict:
     servers: list = []
     hosts: dict = {}
 
-    # Pin the server address so the tunnel never depends on DNS to come up.
-    for s in (cfg.server, cfg.fallback):
-        if s and s["resolved_ip"]:
+    # Pin server addresses so the tunnel never depends on DNS to come up.
+    for s in [cfg.server, cfg.fallback, *cfg.upstreams.values()]:
+        if s and s["resolved_ip"] and s["address"]:
             hosts[s["address"]] = s["resolved_ip"]
 
     # The server's own domain resolves via a direct resolver — it must be
     # reachable before the tunnel exists.
     domain_servers = [f"domain:{cfg.server['address']}"] if cfg.is_domain_server else []
-    if cfg.fallback and not cfg.fallback["resolved_ip"]:
-        domain_servers.append(f"domain:{cfg.fallback['address']}")
+    # Upstreams reached by name need the same treatment: their hostname must
+    # resolve before any tunnel exists.
+    others = [cfg.fallback] if cfg.fallback else []
+    others += list(cfg.upstreams.values())
+    for spec in others:
+        addr = spec["address"]
+        if addr and not spec["resolved_ip"] and not _is_ip(addr):
+            domain_servers.append(f"domain:{addr}")
     if domain_servers:
         servers.append(
             {
@@ -163,18 +126,20 @@ def _inbounds(cfg: Config) -> list:
 
 
 def _outbounds(cfg: Config) -> list:
-    outs = [_outbound(cfg.server, cfg.outbound_mark, "proxy")]
+    # Verbatim, tag and loop-guard mark already enforced at load time.
+    outs = [cfg.server["outbound"]]
     if cfg.fallback:
-        outs.append(_outbound(cfg.fallback, cfg.outbound_mark, "fallback"))
-    # Named upstreams: extra servers that profiles can route selected traffic
-    # through. Same XHTTP builder, same SO_MARK loop guard.
-    for name, server in cfg.upstreams.items():
-        outs.append(_outbound(server, cfg.outbound_mark, server["tag"]))
+        outs.append(cfg.fallback["outbound"])
+    for spec in cfg.upstreams.values():
+        outs.append(spec["outbound"])
     outs += [
         {
             "tag": "direct",
             "protocol": "freedom",
-            "settings": {"domainStrategy": "UseIPv4"},
+            "settings": {
+                "domainStrategy": "UseIPv4" if cfg.ipv6_mode == "off" else "UseIP"
+            },
+            # Generated, so the loop guard is applied here rather than at load.
             "streamSettings": {"sockopt": {"mark": cfg.outbound_mark}},
         },
         {"tag": "block", "protocol": "blackhole", "settings": {}},

@@ -7,6 +7,7 @@ box, which keeps `gw apply` usable on a broken-network gateway.
 from __future__ import annotations
 
 import ipaddress
+import json
 import pathlib
 import sys
 import tomllib
@@ -35,6 +36,25 @@ NAME_RE = __import__("re").compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
 
 class ConfigError(Exception):
     pass
+
+
+def _outbound_address(ob: dict) -> str | None:
+    """Best-effort server address, for DNS pinning only.
+
+    Covers the shapes Xray actually uses (vnext for vless/vmess, servers for
+    trojan/shadowsocks/socks). Anything else returns None, and the config can
+    name the host explicitly with `server_domain`.
+    """
+    settings = ob.get("settings")
+    if not isinstance(settings, dict):
+        return None
+    for key in ("vnext", "servers"):
+        entries = settings.get(key)
+        if isinstance(entries, list) and entries and isinstance(entries[0], dict):
+            addr = entries[0].get("address")
+            if isinstance(addr, str) and addr:
+                return addr
+    return None
 
 
 def _need(d: dict, key: str, where: str):
@@ -96,9 +116,14 @@ class Config:
         self.log_level = xr.get("log_level", "warning")
         self.domain_strategy = xr.get("domain_strategy", "IPIfNonMatch")
         self.outbound_mark = int(xr.get("outbound_mark", 255))
-        self.server = self._server(_need(xr, "server", "xray"), "xray.server")
+        self.server = self._load_outbound(
+            _need(xr, "outbound", "xray"), "xray.outbound", "proxy"
+        )
         fb = xr.get("fallback", {})
-        self.fallback = self._server(fb, "xray.fallback") if fb.get("enabled") else None
+        self.fallback = (
+            self._load_outbound(fb, "xray.fallback", "fallback")
+            if fb.get("enabled") else None
+        )
 
         # ---- routing --------------------------------------------------------
         rt = raw.get("routing", {})
@@ -149,9 +174,7 @@ class Config:
                 raise ConfigError(
                     f"{where}.name {name!r} is reserved — it is a built-in route target"
                 )
-            server = self._server(u, where)
-            server["tag"] = f"up-{name}"
-            self.upstreams[name] = server
+            self.upstreams[name] = self._load_outbound(u, where, f"up-{name}")
 
         # Where a profile rule may send traffic.
         self.route_targets = {
@@ -336,42 +359,93 @@ class Config:
         self.ssh_allow_tailnet = bool(sy.get("ssh_allow_tailnet", True))
 
     # ------------------------------------------------------------------ #
-    def _server(self, s: dict, where: str) -> dict:
-        out = {
-            "tag": s.get("tag", "proxy"),
-            "address": _need(s, "address", where),
-            "port": int(s.get("port", 443)),
-            "uuid": _need(s, "uuid", where),
-            "encryption": s.get("encryption", "none"),
-            "resolved_ip": s.get("resolved_ip", "").strip(),
-            "path": s.get("path", "/"),
-            "host": s.get("host", "") or s.get("address"),
-            "mode": s.get("mode", "auto"),
-            "x_padding": s.get("x_padding", ""),
-            "security": s.get("security", "tls"),
-            "sni": s.get("sni", "") or s.get("address"),
-            "fingerprint": s.get("fingerprint", "chrome"),
-            "alpn": s.get("alpn", ["h2", "http/1.1"]),
-            "allow_insecure": bool(s.get("allow_insecure", False)),
-            "public_key": s.get("public_key", ""),
-            "short_id": s.get("short_id", ""),
-            "spider_x": s.get("spider_x", "/"),
+    def _load_outbound(self, spec: dict, where: str, tag: str) -> dict:
+        """Load a complete Xray outbound object, verbatim.
+
+        The gateway does not model protocols or transports — whatever Xray
+        supports, you can paste. What it does own, and always overrides, is the
+        part that makes the outbound safe to use here:
+
+          tag      routing rules reference it, so the gateway assigns it
+          sockopt.mark  the loop guard; without it the box routes its own
+                        tunnel traffic back into the tunnel and wedges
+        """
+        inline, path = spec.get("json"), spec.get("file")
+        if bool(inline) == bool(path):
+            raise ConfigError(
+                f"{where}: set exactly one of `file` (path to a .json outbound) "
+                "or `json` (the outbound inline)"
+            )
+
+        if path:
+            src = (self.path.parent / path).resolve()
+            try:
+                text = src.read_text()
+            except OSError as e:
+                raise ConfigError(f"{where}.file: {e}")
+            origin = str(src)
+        else:
+            text, origin = inline, f"{where}.json"
+
+        try:
+            ob = json.loads(text)
+        except ValueError as e:
+            raise ConfigError(f"{origin}: not valid JSON — {e}")
+        if not isinstance(ob, dict):
+            raise ConfigError(
+                f"{origin}: expected a single outbound object "
+                '(starting with {"protocol": ...}), not a list or bare value'
+            )
+        if "00000000-0000-0000-0000-000000000000" in text:
+            raise ConfigError(
+                f"{origin} still contains the placeholder UUID from the example "
+                "outbound. Put your real server details in it."
+            )
+        if not isinstance(ob.get("protocol"), str):
+            raise ConfigError(f'{origin}: outbound has no "protocol" field')
+        if "outbounds" in ob or "inbounds" in ob:
+            raise ConfigError(
+                f"{origin}: this looks like a whole Xray config. Use just one "
+                'entry from its "outbounds" array.'
+            )
+
+        if ob.get("tag") not in (None, tag):
+            # Not fatal, but silently renaming would be worse: routing rules
+            # generated elsewhere reference the tag we assign.
+            print(
+                f"note: {origin} has tag {ob['tag']!r}; the gateway uses {tag!r}",
+                file=sys.stderr,
+            )
+        ob["tag"] = tag
+
+        stream = ob.setdefault("streamSettings", {})
+        if not isinstance(stream, dict):
+            raise ConfigError(f"{origin}: streamSettings must be an object")
+        sock = stream.setdefault("sockopt", {})
+        if not isinstance(sock, dict):
+            raise ConfigError(f"{origin}: streamSettings.sockopt must be an object")
+        if "mark" in sock and int(sock["mark"]) != self.outbound_mark:
+            raise ConfigError(
+                f"{origin}: sockopt.mark is {sock['mark']}, but the firewall "
+                f"exempts {self.outbound_mark}. A different mark means Xray's own "
+                "packets get re-captured by TPROXY and the gateway deadlocks. "
+                "Remove it, or change xray.outbound_mark to match."
+            )
+        sock["mark"] = self.outbound_mark
+        sock.setdefault(
+            "domainStrategy", "UseIPv4" if self.ipv6_mode == "off" else "UseIP"
+        )
+
+        server_ip = str(spec.get("server_ip", "")).strip()
+        if server_ip:
+            _ip(server_ip, f"{where}.server_ip")
+        return {
+            "tag": tag,
+            "outbound": ob,
+            "address": spec.get("server_domain") or _outbound_address(ob),
+            "resolved_ip": server_ip,
+            "origin": origin,
         }
-        if out["security"] not in ("tls", "reality", "none"):
-            raise ConfigError(f"{where}.security must be tls, reality or none")
-        if out["mode"] not in ("auto", "packet-up", "stream-up", "stream-one"):
-            raise ConfigError(
-                f"{where}.mode must be auto, packet-up, stream-up or stream-one"
-            )
-        if out["security"] == "reality" and not out["public_key"]:
-            raise ConfigError(f"{where}: security='reality' requires public_key")
-        if out["resolved_ip"]:
-            _ip(out["resolved_ip"], f"{where}.resolved_ip")
-        if out["uuid"].startswith("00000000-0000"):
-            raise ConfigError(
-                f"{where}.uuid is still the placeholder from gateway.example.toml"
-            )
-        return out
 
     # ------------------------------------------------------------------ #
     def clients_by(self, policy: str) -> list[str]:
@@ -379,8 +453,11 @@ class Config:
 
     @property
     def is_domain_server(self) -> bool:
+        addr = self.server["address"]
+        if not addr:
+            return False
         try:
-            ipaddress.ip_address(self.server["address"])
+            ipaddress.ip_address(addr)
             return False
         except ValueError:
             return True

@@ -4,9 +4,8 @@ lan_cidr = "192.168.1.0/24"
 router = "192.168.1.1"
 static_ip = "192.168.1.2"
 [xray]
-[xray.server]
-address = "a.example.com"
-uuid = "11112222-3333-4444-5555-666677778888"
+[xray.outbound]
+file = "outbounds/main.json"
 [[profile]]
 name = "nope"
 base = "block"

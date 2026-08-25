@@ -1,0 +1,35 @@
+{
+  "protocol": "vless",
+  "settings": {
+    "vnext": [
+      {
+        "address": "backup.example.com",
+        "port": 443,
+        "users": [
+          {
+            "id": "99998888-7777-6666-5555-444433332222",
+            "encryption": "none"
+          }
+        ]
+      }
+    ]
+  },
+  "streamSettings": {
+    "network": "xhttp",
+    "security": "tls",
+    "xhttpSettings": {
+      "host": "backup.example.com",
+      "path": "/alt",
+      "mode": "packet-up"
+    },
+    "tlsSettings": {
+      "serverName": "backup.example.com",
+      "fingerprint": "chrome",
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "allowInsecure": false
+    }
+  }
+}

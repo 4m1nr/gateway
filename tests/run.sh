@@ -54,9 +54,14 @@ for f in tests/fixtures/*.toml; do
     ok "$name: both output-chain loop guards present"
   else bad "$name: loop guard missing from the output chain"; fi
 
-  if grep -q '"mark":' "$OUT/$name/usr/local/etc/xray/config.json"; then
-    ok "$name: xray outbounds carry SO_MARK"
-  else bad "$name: xray outbounds are missing SO_MARK"; fi
+  # Outbounds are pasted verbatim now, so the gateway imposing tag + mark on
+  # every one of them is the invariant that keeps the box from deadlocking.
+  mark=$(python3 -c "
+import sys;sys.path.insert(0,'lib');import gwconfig
+print(gwconfig.load('$f').outbound_mark)")
+  if out=$(python3 tests/check_outbounds.py "$OUT/$name/usr/local/etc/xray/config.json" "$mark" 2>&1); then
+    ok "$name: ${out#ok: }"
+  else bad "$name: $out"; fi
 
   # Boot behaviour: the target must exist, and every member must declare an
   # [Install] section, or the stack silently fails to come back after a reboot.
@@ -182,9 +187,7 @@ print('yes' if gwconfig.load('$f').web_enabled else 'no')")
 
     # web.json is world-readable, so the real question is whether any actual
     # secret leaked into it. ("key" appears legitimately as a TLS key *path*.)
-    uuid=$(python3 -c "
-import sys;sys.path.insert(0,'lib');import gwconfig
-print(gwconfig.load('$f').server['uuid'])")
+    uuid=$(python3 tests/secret_of.py "$f")
     if grep -qF "$uuid" "$OUT/$name/etc/gateway/web.json"; then
       bad "$name: the Xray UUID leaked into world-readable web.json"
     elif grep -qiE '"(password|hash|salt|uuid|secret)" *:' "$OUT/$name/etc/gateway/web.json"; then

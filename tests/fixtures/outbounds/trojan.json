@@ -1,0 +1,19 @@
+{
+  "protocol": "trojan",
+  "settings": {
+    "servers": [
+      {
+        "address": "tj.example.com",
+        "port": 443,
+        "password": "s3cr3t-password"
+      }
+    ]
+  },
+  "streamSettings": {
+    "network": "tcp",
+    "security": "tls",
+    "tlsSettings": {
+      "serverName": "tj.example.com"
+    }
+  }
+}

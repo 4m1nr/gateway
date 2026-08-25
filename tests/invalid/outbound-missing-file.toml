@@ -5,7 +5,4 @@ router = "192.168.1.1"
 static_ip = "192.168.1.2"
 [xray]
 [xray.outbound]
-file = "outbounds/main.json"
-[[profile]]
-name = "pointless"
-base = "proxy"
+file = "outbounds/does-not-exist.json"

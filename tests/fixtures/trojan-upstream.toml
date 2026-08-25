@@ -51,7 +51,7 @@ outbound_mark   = 255
 #
 # `gw init` writes this file for you from a vless:// share link.
 [xray.outbound]
-file = "outbounds/main.json"          # or: json = """ { ... } """
+file = "outbounds/trojan.json"          # or: json = """ { ... } """
 
 # Optional. Pins the server's address so the tunnel never needs DNS to come up
 # — otherwise that is a real boot-time chicken-and-egg. Leave empty for a
@@ -172,7 +172,7 @@ statslog_days = 7
 #
 # Must live in this table. A bare `default_policy = ...` written after another
 # [table] belongs to that table and is ignored — the loader rejects that now.
-default = "block"
+default = "proxy"
 
 # Examples of overriding the default. Under default = "proxy" you do NOT need
 # an entry to proxy a device — just point its gateway here.

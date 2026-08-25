@@ -102,12 +102,8 @@ normal tunnel.
 
 ```toml
 [[upstream]]
-name    = "work"
-address = "vpn.work.example"
-port    = 443
-uuid    = "..."
-path    = "/xhttp"
-security = "tls"
+name = "work"
+file = "outbounds/work.json"   # a complete Xray outbound object, used verbatim
 
 [[profile]]
 name = "work-laptop"
@@ -164,6 +160,13 @@ tunnel is down it loses connectivity rather than falling back to a direct path.
 
 If you want a device that is genuinely untouched, use `policy = "direct"`; it
 never reaches Xray at all.
+
+### Upstreams are plain Xray outbounds
+
+`file` (or inline `json`) holds a complete Xray outbound object. The gateway
+overrides only `tag` and `streamSettings.sockopt.mark` — see the README. Any
+protocol Xray supports can be a profile target, so "route work traffic through
+the corporate Trojan server" needs no changes here.
 
 ### Naming
 

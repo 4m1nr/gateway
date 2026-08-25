@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import pathlib
+import json
 import re
 import subprocess
 import sys
@@ -38,6 +39,53 @@ def detect() -> dict:
             ipaddress.ip_network(f"{m.group(1)}/{m.group(2)}", strict=False)
         )
     return out
+
+
+def outbound_json(s: dict) -> dict:
+    """Turn parsed link fields into a complete Xray outbound object.
+
+    From here on the gateway treats it as opaque — this function exists only so
+    a share link is still a one-paste setup.
+    """
+    stream = {
+        "network": "xhttp",
+        "security": s["security"],
+        "xhttpSettings": {
+            "host": s["host"] or s["address"],
+            "path": s["path"],
+            "mode": s["mode"],
+        },
+    }
+    if s["x_padding"]:
+        stream["xhttpSettings"]["xPaddingBytes"] = s["x_padding"]
+    if s["security"] == "tls":
+        stream["tlsSettings"] = {
+            "serverName": s["sni"] or s["address"],
+            "fingerprint": s["fingerprint"],
+            "alpn": s["alpn"],
+            "allowInsecure": False,
+        }
+    elif s["security"] == "reality":
+        stream["realitySettings"] = {
+            "serverName": s["sni"] or s["address"],
+            "fingerprint": s["fingerprint"],
+            "publicKey": s["public_key"],
+            "shortId": s["short_id"],
+            "spiderX": s["spider_x"],
+        }
+    return {
+        "protocol": "vless",
+        "settings": {
+            "vnext": [
+                {
+                    "address": s["address"],
+                    "port": s["port"],
+                    "users": [{"id": s["uuid"], "encryption": s["encryption"]}],
+                }
+            ]
+        },
+        "streamSettings": stream,
+    }
 
 
 def parse_vless(link: str) -> dict:
@@ -127,6 +175,18 @@ def main(repo: str, config: str) -> int:
     print("\n-- misc --")
     tz = ask("timezone", "Asia/Tehran")
 
+    # The outbound is written as its own JSON file; gateway.toml only points
+    # at it. Everything downstream treats that file as opaque.
+    ob_dir = pathlib.Path(repo, "outbounds")
+    ob_dir.mkdir(exist_ok=True)
+    ob_path = ob_dir / "main.json"
+    if ob_path.exists() and ask(f"{ob_path} exists. Overwrite?", "yes") != "yes":
+        print(f"keeping {ob_path}")
+    else:
+        ob_path.write_text(json.dumps(outbound_json(server), indent=2) + "\n")
+        ob_path.chmod(0o600)
+        print(f"\nwrote {ob_path} (0600 — it holds your credentials)")
+
     template = pathlib.Path(repo, "gateway.example.toml").read_text()
     subs = {
         r'wan_if     = "eth0"': f"wan_if     = {toml_str(wan_if)}",
@@ -135,20 +195,7 @@ def main(repo: str, config: str) -> int:
         r'static_ip  = "192.168.1.2"': f"static_ip  = {toml_str(static_ip)}",
         r"prefix_len = 24": f"prefix_len = {prefix}",
         r'timezone         = "Asia/Tehran"': f"timezone         = {toml_str(tz)}",
-        r'address    = "example.com"': f"address    = {toml_str(server['address'])}",
-        r"port       = 443": f"port       = {server['port']}",
-        r'uuid       = "00000000-0000-0000-0000-000000000000"': f"uuid       = {toml_str(server['uuid'])}",
-        r'resolved_ip = ""': f"resolved_ip = {toml_str(resolved)}",
-        r'path        = "/xhttp"': f"path        = {toml_str(server['path'])}",
-        r'host        = ""': f"host        = {toml_str(server['host'])}",
-        r'mode        = "auto"': f"mode        = {toml_str(server['mode'])}",
-        r'x_padding   = ""': f"x_padding   = {toml_str(server['x_padding'])}",
-        r'security    = "tls"': f"security    = {toml_str(server['security'])}",
-        r'sni         = ""': f"sni         = {toml_str(server['sni'])}",
-        r'fingerprint = "chrome"': f"fingerprint = {toml_str(server['fingerprint'])}",
-        r'alpn        = ["h2", "http/1.1"]': f"alpn        = {toml_str(server['alpn'])}",
-        r'public_key  = ""': f"public_key  = {toml_str(server['public_key'])}",
-        r'short_id    = ""': f"short_id    = {toml_str(server['short_id'])}",
+        r'server_ip = ""': f"server_ip = {toml_str(resolved)}",
     }
     for old, new in subs.items():
         if old not in template:
