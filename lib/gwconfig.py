@@ -160,6 +160,19 @@ class Config:
         self.log_level = xr.get("log_level", "warning")
         self.domain_strategy = xr.get("domain_strategy", "IPIfNonMatch")
         self.outbound_mark = int(xr.get("outbound_mark", 255))
+        # ---- performance (parsed before outbounds, which consume it) ----------------------------------------------------
+        perf = raw.get("performance", {})
+        # Xray's per-connection buffer, in KB. The default suits a server with
+        # memory to spare; a thin client benefits from a smaller one, and 0
+        # means "no limit" rather than "none".
+        self.buffer_size_kb = int(perf.get("buffer_size_kb", 64))
+        # Applied to outbound sockets. BBR helps most on a lossy path, which is
+        # what a censored route usually is.
+        self.tcp_congestion = str(perf.get("tcp_congestion", "bbr"))
+        self.tcp_no_delay = bool(perf.get("tcp_no_delay", True))
+        # Xray's own concurrency ceiling for the tunnel.
+        self.conn_idle = int(perf.get("conn_idle_sec", 300))
+
         self.server = self._load_outbound(
             _need(xr, "outbound", "xray"), "xray.outbound", "proxy"
         )
@@ -642,6 +655,12 @@ class Config:
         sock.setdefault(
             "domainStrategy", "UseIPv4" if self.ipv6_mode == "off" else "UseIP"
         )
+        # Performance knobs, only if the outbound has not set them itself —
+        # a pasted outbound stays authoritative about its own transport.
+        if self.tcp_congestion:
+            sock.setdefault("tcpcongestion", self.tcp_congestion)
+        if self.tcp_no_delay:
+            sock.setdefault("tcpNoDelay", True)
 
         server_ip = str(spec.get("server_ip", "")).strip()
         if server_ip:

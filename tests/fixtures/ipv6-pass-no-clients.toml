@@ -361,6 +361,36 @@ lockout_minutes   = 15
 # '''
 
 # ============================================================================
+#  Performance
+#
+#  Measure before changing any of this: `sudo gw bench` reports the link
+#  speed, whether the CPU has AES acceleration, and throughput through the
+#  tunnel against throughput bypassing it — which is what says whether the
+#  bottleneck is Xray, the LAN, or your upstream.
+#
+#  The usual answer for a client at roughly half speed is neither Xray nor
+#  this config: intercepted traffic crosses the single NIC twice, once
+#  inbound from the client and once outbound to the internet. A 100 Mb/s link
+#  therefore caps clients near 50 Mb/s. A second NIC removes that ceiling.
+# ============================================================================
+[performance]
+# Xray's per-connection buffer, in KB. The upstream default suits a server
+# with memory to spare; on a thin client a large buffer costs RAM without
+# buying throughput. 0 means unlimited, not zero.
+buffer_size_kb = 64
+
+# Congestion control for outbound sockets. BBR helps most on a lossy path,
+# which a censored route usually is. Needs the bbr module (00-bootstrap
+# enables it). Empty leaves whatever the outbound JSON specifies.
+tcp_congestion = "bbr"
+
+# Disable Nagle on outbound sockets: better latency, marginally more overhead.
+tcp_no_delay = true
+
+# How long an idle connection is held open, in seconds.
+conn_idle_sec = 300
+
+# ============================================================================
 #  Health watchdog
 # ============================================================================
 [health]

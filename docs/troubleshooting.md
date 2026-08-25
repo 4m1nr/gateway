@@ -85,6 +85,43 @@ nft list chain inet gateway forward | grep killswitch   # drop counter climbing
 
 Fix the tunnel; the client recovers on its own.
 
+## Clients get about half the speed of the proxy on the device
+
+Measure before tuning:
+
+```bash
+sudo gw bench
+```
+
+It reports the NIC link speed and duplex, whether the CPU has AES
+acceleration, and throughput *through* the tunnel against throughput
+*bypassing* it — which is what separates "Xray is slow" from "the LAN is slow"
+from "your upstream is slow".
+
+**The usual answer is the single NIC.** Xray terminates the client's
+connection and opens its own, so every byte crosses the interface twice: in
+from the client, out to the internet. A 100 Mb/s link therefore caps clients
+near 50 Mb/s no matter how fast the tunnel is — an exact halving, which is why
+it reads as a proxy problem. `gw bench` says so explicitly when it sees a
+100 Mb/s link.
+
+The fix is a second NIC (a USB 3.0 gigabit adapter): one leg in, one leg out,
+and the ceiling disappears. Nothing in the config can work around it.
+
+Other causes, in the order `gw bench` will point at them:
+
+- **No AES-NI.** An older thin client does TLS in software, and that is
+  usually the ceiling. `grep -m1 ' aes ' /proc/cpuinfo` — if it is absent,
+  the CPU is the limit.
+- **Half duplex** on the link. Almost always a bad cable or a forced port
+  speed. Collisions destroy throughput far out of proportion.
+- **The tunnel itself** — if `gw bench` shows the tunnel well under direct,
+  the server or the path to it is the constraint, not this box.
+
+`[performance]` in `gateway.toml` tunes the buffer size, congestion control
+and Nagle. Those are worth adjusting once `gw bench` says the bottleneck is
+actually the tunnel; they cannot help a saturated NIC.
+
 ## Everything is slow, or large pages hang
 
 MSS clamping isn't applying, or the path MTU is smaller than assumed. The

@@ -12,6 +12,7 @@
 #   gw check         end-to-end verification, including leak tests
 #   gw diag [ip]     why a client's traffic is or is not being intercepted
 #   gw trace <ip>    follow one client's packets rule by rule, live
+#   gw bench         find the throughput bottleneck
 #   gw client        add/remove/list per-client policy
 #   gw job           add/remove/list scheduled jobs
 #   gw web-passwd    set the dashboard password
@@ -584,6 +585,79 @@ Reading a trace:
 HINT
 }
 
+# ----------------------------------------------------------------- bench ----
+# Halved throughput through a gateway usually has a boring cause. This measures
+# the three that matter instead of guessing between them: the link, the CPU,
+# and the tunnel itself.
+cmd_bench() {
+  need_root bench
+  local wan; wan=$(gw_env WAN_IF)
+  local socks; socks=$(gw_env SOCKS_PORT)
+  local url="${1:-https://speed.cloudflare.com/__down?bytes=50000000}"
+
+  printf '%s== link ==%s\n' "$c_grn" "$c_off"
+  local speed duplex
+  speed=$(cat "/sys/class/net/$wan/speed" 2>/dev/null || echo "?")
+  duplex=$(cat "/sys/class/net/$wan/duplex" 2>/dev/null || echo "?")
+  printf '  %s: %s Mb/s %s\n' "$wan" "$speed" "$duplex"
+  if [ "$speed" != "?" ] && [ "$speed" -le 100 ] 2>/dev/null; then
+    printf '  %s! One NIC carries intercepted traffic TWICE — in from the client\n' "$c_yel"
+    printf '    and out to the internet — so a %s Mb/s link caps clients at about\n' "$speed"
+    printf '    %s Mb/s. That alone explains a halving.%s\n' "$((speed / 2))" "$c_off"
+  fi
+  [ "$duplex" = "half" ] && printf '  %s! HALF DUPLEX — almost always a bad cable or a forced port speed%s\n' "$c_red" "$c_off"
+  printf '  errors/drops: %s\n' \
+    "$(awk -v i="$wan" '$1 ~ i {printf "rx_drop=%s tx_drop=%s", $5, $13}' /proc/net/dev 2>/dev/null)"
+
+  printf '\n%s== cpu ==%s\n' "$c_grn" "$c_off"
+  printf '  cores: %s   model: %s\n' "$(nproc)" \
+    "$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -1)"
+  printf '  aes-ni: %s\n' \
+    "$(grep -qm1 ' aes ' /proc/cpuinfo && echo yes \
+       || echo 'NO — TLS is done in software, which is usually the ceiling on an old thin client')"
+
+  printf '\n%s== throughput ==%s\n' "$c_grn" "$c_off"
+  printf '  downloading 50 MB twice; this takes a moment...\n'
+
+  local t0 t1 direct tunnel
+  t0=$(date +%s.%N)
+  gw_as_user xray curl -o /dev/null -s --max-time 120 "$url" 2>/dev/null || true
+  t1=$(date +%s.%N)
+  direct=$(awk -v a="$t0" -v b="$t1" 'BEGIN{d=b-a; printf "%.1f", d>0 ? 400/d : 0}')
+
+  t0=$(date +%s.%N)
+  curl -o /dev/null -s --max-time 120 --socks5-hostname "127.0.0.1:$socks" "$url" 2>/dev/null || true
+  t1=$(date +%s.%N)
+  tunnel=$(awk -v a="$t0" -v b="$t1" 'BEGIN{d=b-a; printf "%.1f", d>0 ? 400/d : 0}')
+
+  printf '  direct (bypassing the tunnel): %s Mb/s\n' "$direct"
+  printf '  through the tunnel           : %s Mb/s\n' "$tunnel"
+
+  awk -v d="$direct" -v t="$tunnel" -v s="$speed" 'BEGIN {
+    if (d <= 0 || t <= 0) { print "  (a measurement failed - check connectivity)"; exit }
+    r = t / d * 100
+    printf "  tunnel is %.0f%% of direct\n", r
+    if (r < 60) {
+      print "  -> the TUNNEL is the bottleneck: CPU (see aes-ni above), the"
+      print "     server, or the path to it. Not the LAN."
+    } else if (s != "?" && d < s / 2 * 0.8) {
+      print "  -> direct is already well under half the link speed, so the"
+      print "     bottleneck is upstream of this box, not the gateway."
+    } else {
+      print "  -> the tunnel keeps up here, so a slower client is the LAN path:"
+      print "     one NIC carries intercepted traffic twice."
+    }
+  }'
+
+
+  cat <<'HINT'
+
+If clients are slower than this box, the difference is the LAN leg, not Xray:
+intercepted traffic crosses the single NIC twice. A second NIC (a USB 3.0
+gigabit adapter) removes that ceiling entirely.
+HINT
+}
+
 # ---------------------------------------------------------------- client ----
 cmd_client() { $PY "$REPO/lib/clients.py" "$CONFIG" "$@"; }
 cmd_job()    { $PY "$REPO/lib/jobs.py"    "$CONFIG" "$@"; }
@@ -750,6 +824,7 @@ case "${1:-}" in
   check)  shift; cmd_check "$@" ;;
   diag)   shift; cmd_diag "$@" ;;
   trace)  shift; cmd_trace "$@" ;;
+  bench)  shift; cmd_bench "$@" ;;
   client) shift; cmd_client "$@" ;;
   job)    shift; cmd_job "$@" ;;
   web-passwd) shift; cmd_web_passwd "$@" ;;

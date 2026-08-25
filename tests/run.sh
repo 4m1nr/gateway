@@ -86,6 +86,24 @@ for f in tests/fixtures/*.toml; do
     bad "$name: prerouting returns on lo before intercepting marked local traffic — the box will have no internet"
   fi
 
+  # Performance settings have to reach the generated config, or tuning them
+  # looks like it works and changes nothing.
+  if python3 -c "
+import json,sys;sys.path.insert(0,'lib');import gwconfig
+c = gwconfig.load('$f'); d = json.load(open('$OUT/$name/usr/local/etc/xray/config.json'))
+lvl = d['policy']['levels']['0']
+assert lvl['bufferSize'] == c.buffer_size_kb, 'bufferSize not applied'
+assert lvl['connIdle'] == c.conn_idle, 'connIdle not applied'
+if c.tcp_congestion:
+    for o in d['outbounds']:
+        if o.get('protocol') == 'blackhole':
+            continue
+        s = o['streamSettings']['sockopt']
+        assert s.get('tcpcongestion') == c.tcp_congestion, o['tag']
+"; then
+    ok "$name: performance settings reach the Xray config"
+  else bad "$name: performance settings are not applied"; fi
+
   # A poisoned-DNS drop that overlapped the LAN would break local traffic; one
   # that missed 10.10.34.34 would not do its job.
   if grep -q 'poisoned-dns' "$nftf"; then

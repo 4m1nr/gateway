@@ -25,6 +25,15 @@ def _is_ip(value: str) -> bool:
         return False
 
 
+def _direct_sockopt(cfg: Config) -> dict:
+    sock = {"mark": cfg.outbound_mark}
+    if cfg.tcp_congestion:
+        sock["tcpcongestion"] = cfg.tcp_congestion
+    if cfg.tcp_no_delay:
+        sock["tcpNoDelay"] = True
+    return sock
+
+
 def _dns(cfg: Config) -> dict:
     servers: list = []
     hosts: dict = {}
@@ -139,8 +148,10 @@ def _outbounds(cfg: Config) -> list:
             "settings": {
                 "domainStrategy": "UseIPv4" if cfg.ipv6_mode == "off" else "UseIP"
             },
-            # Generated, so the loop guard is applied here rather than at load.
-            "streamSettings": {"sockopt": {"mark": cfg.outbound_mark}},
+            # Generated, so the loop guard and the performance settings are
+            # applied here rather than at load time. This outbound carries the
+            # domestic-direct half of the split, so it wants the same tuning.
+            "streamSettings": {"sockopt": _direct_sockopt(cfg)},
         },
         {"tag": "block", "protocol": "blackhole", "settings": {}},
     ]
@@ -255,8 +266,18 @@ def build(cfg: Config) -> dict:
         "outbounds": _outbounds(cfg),
         "routing": _routing(cfg),
         "policy": {
-            "levels": {"0": {"handshake": 4, "connIdle": 300, "uplinkOnly": 0,
-                             "downlinkOnly": 0}},
+            "levels": {
+                "0": {
+                    "handshake": 4,
+                    "connIdle": cfg.conn_idle,
+                    "uplinkOnly": 0,
+                    "downlinkOnly": 0,
+                    # Per-connection buffer. The default is tuned for a server
+                    # with memory to spare; on a thin client a large buffer
+                    # costs RAM and cache locality without buying throughput.
+                    "bufferSize": cfg.buffer_size_kb,
+                }
+            },
             "system": {"statsOutboundUplink": True, "statsOutboundDownlink": True},
         },
         "stats": {},
