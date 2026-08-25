@@ -49,6 +49,33 @@ gw_curl() {
   if [ -n "$proxy" ]; then curl -fsSL --proxy "$proxy" "$@"; else curl -fsSL "$@"; fi
 }
 
+# See templates/lib/net.sh for why this is not just `runuser`.
+gw_as_user() {
+  local user="$1"; shift
+  local uid gid
+  # Numeric ids: some setpriv builds reject a group NAME for --regid, and the
+  # failure ("failed to parse regid") is far from obvious.
+  uid=$(id -u "$user" 2>/dev/null) || { echo "no such user: $user" >&2; return 1; }
+  gid=$(id -g "$user" 2>/dev/null) || gid="$uid"
+
+  # Probe each method before committing to it. setpriv is preferred because
+  # runuser moved to util-linux-extra in Debian 12 and is absent from a minimal
+  # install — but setpriv's --clear-groups needs privileges that some
+  # environments withhold, so a failure here should fall through rather than
+  # take the caller down with it.
+  if command -v setpriv >/dev/null 2>&1 &&
+     setpriv --reuid="$uid" --regid="$gid" --clear-groups true 2>/dev/null; then
+    setpriv --reuid="$uid" --regid="$gid" --clear-groups "$@"
+  elif command -v runuser >/dev/null 2>&1 && runuser -u "$user" -- true 2>/dev/null; then
+    runuser -u "$user" -- "$@"
+  elif command -v sudo >/dev/null 2>&1 && sudo -n -u "$user" -- true 2>/dev/null; then
+    sudo -n -u "$user" -- "$@"
+  else
+    echo "cannot run as $user: no working setpriv, runuser or sudo" >&2
+    return 127
+  fi
+}
+
 APT_PROXY_CONF=/etc/apt/apt.conf.d/99-gw-bootstrap-proxy
 apt_proxy_on() {
   local proxy; proxy=$(gw_proxy)

@@ -335,10 +335,10 @@ for f in scripts/*.sh templates/lib/*.sh; do
     case "$line" in *curl*) ;; *) continue ;; esac
     # Deliberate exceptions, each for a reason:
     #   socks5-hostname  a probe through the local Xray, not an external fetch
-    #   runuser -u xray  the leak test, which must bypass the tunnel by design
+    #   gw_as_user xray  the leak test, which must bypass the tunnel by design
     #   curl -6          the IPv6 probe, testing whether v6 egress exists at all
     case "$line" in
-      *socks5-hostname*|*"runuser -u xray"*|*"curl -6"*) continue ;;
+      *socks5-hostname*|*"gw_as_user xray"*|*"curl -6"*) continue ;;
     esac
     case "$line" in
       *gw_curl*)

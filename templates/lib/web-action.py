@@ -268,8 +268,24 @@ def act_probe() -> dict:
     tunnel_ip = tun.strip() if rc == 0 else None
     # Running as the xray user bypasses the tunnel (the output chain returns
     # early on that uid), which is how we see the box's real address.
-    rc, real, _ = run(["runuser", "-u", "xray", "--", "curl", "-fsS",
-                       "--max-time", "15", "https://api.ipify.org"], timeout=25)
+    #
+    # setpriv before runuser: runuser is in util-linux-extra on Debian 12+, so
+    # a minimal install does not have it.
+    if shutil.which("setpriv"):
+        # Numeric ids: some setpriv builds reject a group name for --regid.
+        import pwd
+        try:
+            ent = pwd.getpwnam("xray")
+            as_xray = ["setpriv", f"--reuid={ent.pw_uid}",
+                       f"--regid={ent.pw_gid}", "--clear-groups"]
+        except KeyError:
+            fail("the xray user does not exist — has `gw apply` run?")
+    elif shutil.which("runuser"):
+        as_xray = ["runuser", "-u", "xray", "--"]
+    else:
+        as_xray = ["sudo", "-n", "-u", "xray", "--"]
+    rc, real, _ = run(as_xray + ["curl", "-fsS", "--max-time", "15",
+                                 "https://api.ipify.org"], timeout=25)
     real_ip = real.strip() if rc == 0 else None
     return {
         "tunnel_ip": tunnel_ip,

@@ -113,11 +113,15 @@ fi
 sec "egress"
 # Anything running as the xray user bypasses the tunnel (the OUTPUT chain
 # returns early on skuid), which gives us the box's real address for free.
-REAL=$(runuser -u xray -- curl -fsS --max-time 15 https://api.ipify.org 2>/dev/null || echo "")
+# gw_as_user, not runuser: runuser is in util-linux-extra on Debian 12+ and is
+# absent from a minimal install.
+REAL=$(gw_as_user xray curl -fsS --max-time 15 https://api.ipify.org 2>/dev/null || echo "")
 TUN=$(curl -fsS --max-time 20 --socks5-hostname "127.0.0.1:$SOCKS_PORT" \
         https://api.ipify.org 2>/dev/null || echo "")
 
 if [ -n "$REAL" ]; then ok "direct egress works (ISP address: $REAL)"
+elif ! gw_as_user xray true 2>/dev/null; then
+  skip "cannot run as the xray user — direct-egress comparison unavailable"
 else bad "no direct egress — the box cannot reach the internet at all"; fi
 
 if [ -n "$TUN" ]; then ok "tunnel egress works (exit address: $TUN)"
