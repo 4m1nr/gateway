@@ -351,6 +351,31 @@ cmd_status() {
     fi
   done
 
+  # How long Xray has been up, because a restart is invisible after the fact
+  # and is itself an outage: it drops every live connection on every client.
+  # A client that "lost the internet for a moment" a few minutes ago, next to
+  # an xray that has only been up a few minutes, is the whole explanation.
+  # Only while it is actually running: ActiveEnterTimestamp survives the stop,
+  # so an inactive unit would otherwise report a cheerful uptime.
+  local started epoch age
+  started=""
+  systemctl is-active --quiet xray 2>/dev/null \
+    && started=$(systemctl show xray -p ActiveEnterTimestamp --value 2>/dev/null || true)
+  # `date -d ""` does not fail — GNU date reads an empty string as midnight
+  # today, which would report a plausible-looking uptime for a dead service.
+  epoch=0
+  [ -n "$started" ] && epoch=$(date -d "$started" +%s 2>/dev/null || echo 0)
+  if [ "$epoch" -gt 0 ]; then
+    age=$(( $(date +%s) - epoch ))
+    if [ "$age" -lt 900 ]; then
+      printf '%-11s %sstarted %sm %ss ago%s — anything connected before that was dropped\n' \
+        "xray up" "$c_yel" "$((age / 60))" "$((age % 60))" "$c_off"
+    else
+      printf '%s%-11s %sh %sm%s\n' "$c_dim" "xray up" "$((age / 3600))" \
+        "$(((age % 3600) / 60))" "$c_off"
+    fi
+  fi
+
   if ! command -v nft >/dev/null 2>&1; then
     printf 'firewall    %sunknown%s — nft is not on PATH, cannot tell\n' "$c_yel" "$c_off"
   elif nft list table inet gateway >/dev/null 2>&1; then

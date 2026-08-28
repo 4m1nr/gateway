@@ -707,6 +707,30 @@ else
   bad "tunnel downlink parse returned '$got', expected 1023 (direct/block/uplink/inbound must not count)"
 fi
 
+# A restart is itself an outage — it drops every live connection on every
+# client — and it leaves no trace once it is over, so gw status has to show how
+# long Xray has been up. But ActiveEnterTimestamp outlives the stop, and GNU
+# date reads an empty -d argument as midnight today instead of failing, so an
+# unguarded version reports a confident uptime for a service that is not
+# running at all.
+if [ "$(date -d "" +%s 2>/dev/null || echo 0)" != "0" ]; then
+  ok "date -d \"\" really does return a time rather than failing (the trap is real)"
+else
+  ok "date -d \"\" fails on this system"
+fi
+if grep -q '\[ -n "\$started" \] && epoch=' bin/gw; then
+  ok "gw status guards the empty start timestamp before handing it to date"
+else
+  bad "gw status passes a possibly-empty timestamp to date, which yields midnight today"
+fi
+if systemctl is-active --quiet xray 2>/dev/null; then
+  ok "xray is running here; skipping the inactive-uptime check"
+elif GW_REPO="$PWD" bash bin/gw status 2>/dev/null | grep -q 'xray up'; then
+  bad "gw status reports an uptime for an xray that is not running"
+else
+  ok "gw status reports xray uptime only while it is running"
+fi
+
 # The other half of the split: AdGuard already records, per client, whether the
 # client was still asking this box anything. A gap there is the client leaving,
 # not the gateway failing — and the histogram has to show the gap, not skip it.
