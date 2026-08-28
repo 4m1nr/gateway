@@ -430,6 +430,44 @@ dashboard runs `gw apply` as root through the helper, so the difference is
 almost always a validation error surfaced in the returned output. Check
 `journalctl -u gw-web -n 50`.
 
+## Tailscale says "IP forwarding is disabled" but forwarding works
+
+```
+health: Subnet routing is enabled, but IP forwarding is disabled.
+        Check that IP forwarding is enabled on your machine.
+```
+
+The message names IPv4 forwarding, which is almost never the one that is off.
+Tailscale checks **both** families, and `--advertise-exit-node` advertises
+`::/0` alongside `0.0.0.0/0` — there is no v4-only exit node — so IPv6
+forwarding being off is enough on its own to produce this, on a box that is
+forwarding IPv4 perfectly well.
+
+With `[ipv6] mode = "off"` that used to be exactly the state: IPv6 disabled on
+the LAN interface, and `net.ipv6.conf.all.forwarding` never set. `gw apply`
+now sets it, so:
+
+```bash
+cd /opt/gateway && git pull && sudo gw apply
+sudo gw check          # "IPv6 forwarding on", and no tailscale health warnings
+```
+
+Enabling it changes nothing on the LAN: the WAN interface has `disable_ipv6=1`
+so no IPv6 exists there, and the ruleset drops IPv6 everywhere except from
+`tailscale0`. It removes a disagreement rather than opening a path — the
+firewall was already allowing tailnet IPv6 through the forward chain while the
+kernel silently refused to forward it.
+
+It does not give you an IPv6 exit node: the box has no IPv6 route to the
+internet. A peer using it for IPv6 now gets an immediate unreachable and falls
+back to IPv4, instead of its packets vanishing.
+
+Read the values yourself with:
+
+```bash
+sudo gw diag            # the "forwarding" section shows both families
+```
+
 ## Tailscale can't connect
 
 If `route_control_via_xray = true`, tailscaled reaches the coordination server

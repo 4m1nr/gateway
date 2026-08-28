@@ -78,6 +78,23 @@ else
   ok "nftables.service is not competing for the ruleset"
 fi
 
+# Forwarding, both families. Tailscale checks IPv6 as well, because
+# `--advertise-exit-node` advertises ::/0 alongside 0.0.0.0/0 — there is no
+# v4-only exit node. So v6 forwarding being off is enough on its own to have
+# Tailscale report "IP forwarding is disabled" on a box that forwards IPv4
+# perfectly well, and the wording sends you to check the knob that is fine.
+if [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)" = 1 ]; then
+  ok "IPv4 forwarding on"
+else
+  bad "net.ipv4.ip_forward is 0 — direct-policy clients cannot reach anything"
+fi
+V6FWD=$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || echo missing)
+case "$V6FWD" in
+  1) ok "IPv6 forwarding on (Tailscale checks it even with IPv6 off on the LAN)" ;;
+  missing) skip "IPv6 is compiled out of this kernel" ;;
+  *) bad "net.ipv6.conf.all.forwarding is 0 — Tailscale will report 'IP forwarding is disabled'" ;;
+esac
+
 if ip rule list | grep -q "lookup $RT_TABLE"; then ok "fwmark policy rule present"
 else bad "no fwmark rule — TPROXY packets will not be delivered locally"; fi
 
@@ -102,7 +119,11 @@ sec "default policy"
 # The whole point of the catch-all: a device only has to set its gateway.
 case "${DEFAULT_POLICY:-proxy}" in
   proxy)
-    if nft list chain inet gateway prerouting | grep -q "tproxy ip to 127.0.0.1:$TPROXY_PORT"; then
+    # `tproxy ip to :PORT`, not `to 127.0.0.1:PORT`. Rewriting the destination
+    # to loopback makes the packet a martian on a real interface and the kernel
+    # drops it; the rule was fixed and this check was not, so it reported a
+    # missing catch-all on a ruleset that had one.
+    if nft list chain inet gateway prerouting | grep -q "tproxy ip to :$TPROXY_PORT"; then
       ok "unlisted devices pointing here are intercepted by default"
     else bad "no catch-all TPROXY rule — an unlisted device would just be dropped"; fi
     if nft list chain inet gateway forward | grep -q "killswitch-default"; then
@@ -281,6 +302,24 @@ if command -v tailscale >/dev/null && tailscale status >/dev/null 2>&1; then
   tailscale status --json | grep -q '"ExitNodeOption": *true' \
     && ok "advertised as an exit node" \
     || skip "not advertised as an exit node (or not yet approved in the admin console)"
+  # Tailscale keeps its own list of what it thinks is wrong with this machine.
+  # Surfacing it here means `gw check` cannot pass while Tailscale is telling
+  # anyone who looks at the admin console that the box is misconfigured.
+  TSHEALTH=$(tailscale status --json 2>/dev/null \
+             | python3 -c 'import json,sys
+try: d = json.load(sys.stdin)
+except Exception: raise SystemExit
+for h in (d.get("Health") or []): print(h)' 2>/dev/null || true)
+  if [ -n "$TSHEALTH" ]; then
+    while IFS= read -r h; do
+      [ -n "$h" ] && bad "tailscale: $h"
+    done <<TSEOF
+$TSHEALTH
+TSEOF
+  else
+    ok "tailscale reports no health warnings"
+  fi
+
   if [ "$(cat /run/gateway/lifeline 2>/dev/null || echo 0)" = "1" ]; then
     bad "the lifeline is ENGAGED — tailscaled is bypassing the tunnel because it has been down too long"
   else ok "lifeline not engaged"; fi

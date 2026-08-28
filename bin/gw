@@ -610,6 +610,23 @@ cmd_diag() {
     "$(cat /proc/sys/net/ipv4/ip_forward)" \
     "$(cat /proc/sys/net/ipv4/conf/all/rp_filter)" \
     "$(cat /proc/sys/net/ipv4/conf/all/send_redirects)"
+
+  # Tailscale checks BOTH families. `--advertise-exit-node` advertises ::/0 as
+  # well as 0.0.0.0/0 — there is no v4-only exit node — so v6 forwarding off is
+  # enough on its own to produce "Subnet routing is enabled, but IP forwarding
+  # is disabled", on a box that forwards IPv4 perfectly well. The generic
+  # wording sends people to check ip_forward, which is not the one that is off.
+  local fwd6
+  fwd6=$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || echo "n/a")
+  printf '  ipv6 forwarding (all)=%s' "$fwd6"
+  for i in $(ls /proc/sys/net/ipv4/conf 2>/dev/null | grep -vE '^(all|default)$'); do
+    printf ' %s:v4=%s' "$i" "$(cat "/proc/sys/net/ipv4/conf/$i/forwarding" 2>/dev/null || echo '?')"
+  done
+  printf '\n'
+  if [ "$fwd6" = "0" ]; then
+    printf '    %s^ this alone makes Tailscale report "IP forwarding is disabled"\n' "$c_yel"
+    printf '      even with IPv4 forwarding on. Fix: sudo gw apply%s\n' "$c_off"
+  fi
   printf '  xray listening: %s\n' \
     "$(ss -lntup 2>/dev/null | grep -c "$(gw_env TPROXY_PORT)") socket(s) on $(gw_env TPROXY_PORT)"
 

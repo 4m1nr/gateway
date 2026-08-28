@@ -188,9 +188,25 @@ def render_sysctl(cfg: Config) -> str:
             "# break Tailscale, which uses IPv6 for its own tailnet addressing.\n"
             f"net.ipv6.conf.{cfg.wan_if}.disable_ipv6 = 1\n"
             f"net.ipv6.conf.{cfg.wan_if}.accept_ra = 0\n"
+            "\n"
+            "# IPv6 forwarding stays ON even with IPv6 off on the LAN, and it is\n"
+            "# the tailnet that needs it. `--advertise-exit-node` advertises\n"
+            "# ::/0 as well as 0.0.0.0/0 — there is no v4-only exit node — so\n"
+            "# Tailscale checks v6 forwarding and reports the box as broken\n"
+            "# without it: \"Subnet routing is enabled, but IP forwarding is\n"
+            "# disabled.\"\n"
+            "#\n"
+            "# It also matches what the firewall already allows: the ruleset\n"
+            "# drops IPv6 everywhere except from tailscale0, so leaving the\n"
+            "# kernel knob off meant the two disagreed, with the kernel\n"
+            "# silently winning. The LAN side cannot leak either way, because\n"
+            f"# {cfg.wan_if} has no IPv6 at all.\n"
+            "net.ipv6.conf.all.forwarding = 1\n"
+            "net.ipv6.conf.default.forwarding = 1\n"
         )
     else:
-        v6 = "net.ipv6.conf.all.forwarding = 1\n"
+        v6 = ("net.ipv6.conf.all.forwarding = 1\n"
+              "net.ipv6.conf.default.forwarding = 1\n")
     bbr = ("net.core.default_qdisc = fq\n"
            "net.ipv4.tcp_congestion_control = bbr\n") if cfg.bbr else ""
     return subst(

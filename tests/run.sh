@@ -892,6 +892,71 @@ else
 fi
 
 echo
+echo "== forwarding is on for both families =="
+# Tailscale checks IPv6 too: --advertise-exit-node advertises ::/0 alongside
+# 0.0.0.0/0, so v6 forwarding off is enough on its own to have it report
+# "Subnet routing is enabled, but IP forwarding is disabled" — on a box that
+# forwards IPv4 perfectly well, which sends you to check the wrong knob.
+for mode in off pass; do
+  cfg="$OUT/v6-$mode.toml"
+  sed "s/^mode  *=.*/mode = \"$mode\"/" tests/fixtures/default.toml > "$cfg"
+  python3 lib/render.py "$cfg" "$OUT/v6-$mode" >/dev/null 2>&1 || { bad "ipv6 mode=$mode did not render"; continue; }
+  sysctlf="$OUT/v6-$mode/etc/sysctl.d/99-gateway.conf"
+  if grep -q '^net.ipv6.conf.all.forwarding = 1' "$sysctlf" \
+     && grep -q '^net.ipv4.ip_forward = 1' "$sysctlf"; then
+    ok "ipv6 mode=$mode still enables forwarding for both families"
+  else
+    bad "ipv6 mode=$mode leaves a family unforwarded, which Tailscale reports as broken"
+  fi
+done
+# Disabling v6 on the LAN link is separate from forwarding, and must survive.
+if grep -q 'disable_ipv6 = 1' "$OUT/v6-off/etc/sysctl.d/99-gateway.conf"; then
+  ok "IPv6 is still disabled on the LAN interface"
+else
+  bad "enabling v6 forwarding removed the per-interface v6 disable"
+fi
+
+diagout=$(sed -n '/^cmd_diag()/,/^}/p' bin/gw)
+if printf '%s' "$diagout" | grep -q 'ipv6/conf/all/forwarding'; then
+  ok "gw diag reports IPv6 forwarding, not just ip_forward"
+else
+  bad "gw diag shows only IPv4 forwarding"
+fi
+if grep -q 'net.ipv6.conf.all.forwarding is 0' scripts/90-verify.sh; then
+  ok "gw check fails when IPv6 forwarding is off"
+else
+  bad "gw check does not check IPv6 forwarding"
+fi
+if grep -q 'tailscale: \$h' scripts/90-verify.sh; then
+  ok "gw check surfaces Tailscale's own health warnings"
+else
+  bad "gw check ignores what Tailscale says is wrong with the box"
+fi
+
+# The verify script greps the live ruleset. When a rule changes and the grep
+# does not, `gw check` reports a missing rule on a ruleset that has it — which
+# is exactly what happened when tproxy stopped targeting 127.0.0.1.
+# The rendered file keeps $TPROXY_PORT as an nft define and the live ruleset
+# has it expanded, so compare the part that actually changed: the destination
+# form. `to :PORT` keeps the original address; `to 127.0.0.1:PORT` rewrites it
+# to loopback, which is a martian on a real interface.
+vpat=$(grep -o 'tproxy ip to [^"]*\$TPROXY_PORT' scripts/90-verify.sh | head -1)
+if [ -z "$vpat" ]; then
+  bad "gw check no longer greps for a tproxy rule at all"
+elif printf '%s' "$vpat" | grep -q '127\.0\.0\.1'; then
+  bad "gw check greps for '$vpat' — the renderer stopped emitting that form"
+elif grep -q 'tproxy ip to :\$TPROXY_PORT' "$OUT/default/etc/nftables.d/gateway.nft"; then
+  ok "gw check looks for the tproxy destination form the renderer emits"
+else
+  bad "the rendered ruleset no longer contains 'tproxy ip to :\$TPROXY_PORT'"
+fi
+if grep -q 'tproxy ip to 127.0.0.1' "$OUT/default/etc/nftables.d/gateway.nft"; then
+  bad "the ruleset rewrites the destination to loopback, which is a martian"
+else
+  ok "no rule rewrites an intercepted packet's destination to loopback"
+fi
+
+echo
 echo "== scheduled updates =="
 # Geodata had a daily timer; Xray and AdGuard had nothing at all. They updated
 # only when somebody remembered to run `gw update` by hand, which is not what
