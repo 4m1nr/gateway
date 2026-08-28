@@ -242,6 +242,13 @@ func decodeArray(dec *json.Decoder) ([]any, error) {
 // ---------------------------------------------------------------- encoding --
 
 // MarshalJSON writes the object with its keys in their original order.
+//
+// Values are encoded without HTML escaping. encoding/json escapes <, > and &
+// unconditionally in json.Marshal, and an outer encoder configured with
+// SetEscapeHTML(false) cannot undo what a nested Marshaler already escaped — so
+// doing it here is what lets EncodeIndented match json.dumps. Callers who want
+// the escaping still get it: json.Marshal compacts this output with escaping
+// applied, so only the explicitly non-escaping path opts out.
 func (o *Object) MarshalJSON() ([]byte, error) {
 	if o == nil {
 		return []byte("null"), nil
@@ -252,13 +259,13 @@ func (o *Object) MarshalJSON() ([]byte, error) {
 		if i > 0 {
 			buf.WriteByte(',')
 		}
-		key, err := json.Marshal(k)
+		key, err := marshalNoEscape(k)
 		if err != nil {
 			return nil, err
 		}
 		buf.Write(key)
 		buf.WriteByte(':')
-		val, err := json.Marshal(o.vals[k])
+		val, err := marshalNoEscape(o.vals[k])
 		if err != nil {
 			return nil, err
 		}
@@ -268,6 +275,18 @@ func (o *Object) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// marshalNoEscape is json.Marshal with HTML escaping switched off.
+func marshalNoEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	// Encode appends a newline that has no place inside a document.
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
 func (o *Object) UnmarshalJSON(data []byte) error {
 	parsed, err := DecodeObject(data)
 	if err != nil {
@@ -275,4 +294,23 @@ func (o *Object) UnmarshalJSON(data []byte) error {
 	}
 	o.keys, o.vals = parsed.keys, parsed.vals
 	return nil
+}
+
+// EncodeIndented renders v the way Python's json.dumps(obj, indent=2) does,
+// with a trailing newline: two-space indent, no HTML escaping, and object keys
+// in the order Object recorded them.
+//
+// The escaping matters. encoding/json escapes <, > and & by default; json.dumps
+// does not. A REALITY serverName or an XHTTP path containing one of those would
+// otherwise render differently in Go and Python, and the generated Xray config
+// is compared byte-for-byte against output frozen from the Python renderer.
+func EncodeIndented(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

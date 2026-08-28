@@ -17,6 +17,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/am1nr/gateway/internal/jsonx"
 )
 
 // nameRE constrains profile, upstream and job names. They become Xray outbound
@@ -32,15 +34,49 @@ func Load(path string) (*Config, error) {
 			"or run `gw init`.", path)
 	}
 	var raw map[string]any
-	if _, err := toml.DecodeFile(path, &raw); err != nil {
+	md, err := toml.DecodeFile(path, &raw)
+	if err != nil {
 		return nil, errf("%s: %v", path, err)
 	}
-	return New(raw, path)
+	return newConfig(raw, routeKeyOrder(md), path)
 }
 
-// New validates an already-decoded gateway.toml.
+// routeKeyOrder recovers the key order of every [[route]] table.
+//
+// A custom route's TOML table IS the Xray rule, so the keys are the user's
+// words. toml.MetaData.Keys() reports them in document order, with a bare
+// "route" marking the start of each array element.
+func routeKeyOrder(md toml.MetaData) [][]string {
+	var out [][]string
+	for _, key := range md.Keys() {
+		parts := []string(key)
+		if len(parts) == 0 || parts[0] != "route" {
+			continue
+		}
+		if len(parts) == 1 {
+			out = append(out, nil)
+			continue
+		}
+		if len(out) == 0 {
+			continue
+		}
+		// Only direct children; a nested table's keys are sorted instead.
+		if len(parts) == 2 {
+			out[len(out)-1] = append(out[len(out)-1], parts[1])
+		}
+	}
+	return out
+}
+
+// New validates an already-decoded gateway.toml. Key order for custom routing
+// rules is not recoverable this way, so those keys are sorted.
 func New(raw map[string]any, path string) (*Config, error) {
+	return newConfig(raw, nil, path)
+}
+
+func newConfig(raw map[string]any, routeOrder [][]string, path string) (*Config, error) {
 	c := &Config{
+		routeKeyOrder:  routeOrder,
 		Raw:            raw,
 		Path:           path,
 		Intercepted:    map[string]bool{},
@@ -511,38 +547,40 @@ func (c *Config) parseCustomRoutes(raw map[string]any) error {
 				"(after the geo split)", where)
 		}
 
-		var rule map[string]any
+		var rule *jsonx.Object
 		if rawJSON, ok := r["json"]; ok {
+			// A raw rule, for anything the TOML form cannot express. Its key
+			// order comes from the JSON text.
 			text, ok := rawJSON.(string)
 			if !ok {
 				return errf("%s.json must be a string containing one rule object", where)
 			}
-			decoded, err := decodeRuleJSON(text)
+			rule, err = jsonx.DecodeObject([]byte(text))
 			if err != nil {
-				return errf("%s.json: %v", where, err)
+				return errf("%s.json: not valid JSON — %v", where, err)
 			}
-			rule = decoded
 		} else {
-			rule = map[string]any{}
-			for k, v := range r {
-				if k != "position" {
-					rule[k] = v
+			// The TOML table IS the rule, minus the one key the gateway
+			// consumes. Keys keep the order they were written in.
+			rule = jsonx.NewObject()
+			for _, k := range c.routeKeys(i, r) {
+				if k == "position" {
+					continue
 				}
+				rule.Set(k, tomlToJSON(r[k]))
 			}
 		}
 
-		if _, ok := rule["type"]; !ok {
-			rule["type"] = "field"
-		}
-		if _, hasBalancer := rule["balancerTag"]; !hasBalancer {
-			target, _ := rule["outboundTag"].(string)
+		rule.SetDefault("type", "field")
+		if !rule.Has("balancerTag") {
+			target, _ := rule.GetString("outboundTag")
 			if target == "" {
 				return errf("%s has no outboundTag — say where the matched "+
 					"traffic should go (one of: %s)", where,
 					strings.Join(sortedKeys(c.RouteTargets), ", "))
 			}
 			if tag, ok := c.RouteTargets[target]; ok {
-				rule["outboundTag"] = tag
+				rule.Set("outboundTag", tag)
 			} else if !isRouteTag(c.RouteTargets, target) {
 				return errf("%s.outboundTag %q is not a known target. Expected one of: %s",
 					where, target, strings.Join(sortedKeys(c.RouteTargets), ", "))
@@ -551,7 +589,7 @@ func (c *Config) parseCustomRoutes(raw map[string]any) error {
 
 		matched := false
 		for _, m := range routeMatchers {
-			if _, ok := rule[m]; ok {
+			if rule.Has(m) {
 				matched = true
 				break
 			}
@@ -563,6 +601,29 @@ func (c *Config) parseCustomRoutes(raw map[string]any) error {
 		c.Routes = append(c.Routes, CustomRoute{Position: position, Rule: rule})
 	}
 	return nil
+}
+
+// routeKeys returns the keys of route i in the order they were written, or
+// sorted when that order was not recorded. Any key present in the table but
+// missing from the recorded order is appended, so a key can never be dropped.
+func (c *Config) routeKeys(i int, r map[string]any) []string {
+	if i >= len(c.routeKeyOrder) || len(c.routeKeyOrder[i]) == 0 {
+		return sortedMapKeys(r)
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(r))
+	for _, k := range c.routeKeyOrder[i] {
+		if _, ok := r[k]; ok && !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	for _, k := range sortedMapKeys(r) {
+		if !seen[k] {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // --------------------------------------------------------------- clients --

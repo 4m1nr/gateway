@@ -1,6 +1,10 @@
 package config
 
-import "net/netip"
+import (
+	"net/netip"
+
+	"github.com/am1nr/gateway/internal/jsonx"
+)
 
 // TailnetV4 is the CGNAT range Tailscale assigns from. It is never routed into
 // the tunnel and never treated as a poisoned DNS answer.
@@ -58,7 +62,11 @@ type Profile struct {
 // rule; Position is the only key the gateway consumes.
 type CustomRoute struct {
 	Position string // "first", "before" (default) or "after"
-	Rule     map[string]any
+	// Rule is the Xray routing rule, with keys in the order they were written.
+	// Order carries no meaning to Xray, but the dashboard round-trips these
+	// rules through an editor and reordering someone's keys on every save is
+	// its own small betrayal.
+	Rule *jsonx.Object
 }
 
 // Job is a bash script on a cron schedule, rendered into /etc/cron.d.
@@ -190,6 +198,11 @@ type Config struct {
 
 	upstreamByName map[string]*Upstream
 	profileByName  map[string]*Profile
+
+	// routeKeyOrder records the key order of each [[route]] table as written,
+	// recovered from the TOML decoder's metadata. nil when the config was not
+	// read from a file, in which case keys are sorted for determinism.
+	routeKeyOrder [][]string
 }
 
 // Upstream returns the named upstream, if it exists.
