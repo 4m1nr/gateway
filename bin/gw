@@ -220,6 +220,21 @@ cmd_apply() {
 
   systemctl daemon-reload
 
+  # Keep /usr/local/bin/gw pointing INTO the repo. If it is a copy instead of
+  # a symlink, `git pull` updates the checkout and changes nothing about the
+  # command you actually run: every fix you pull looks like it did not work,
+  # and the only evidence is that the output never changes.
+  local link=/usr/local/bin/gw
+  if [ ! -L "$link" ] || [ "$(readlink -f "$link")" != "$(readlink -f "$REPO/bin/gw")" ]; then
+    if [ -e "$link" ] && [ ! -L "$link" ]; then
+      warn "$link is a copy, not a symlink — it has been surviving your pulls"
+      mv -f "$link" "$link.bak"
+      warn "the old copy is at $link.bak"
+    fi
+    ln -sfn "$REPO/bin/gw" "$link"
+    info "$link -> $REPO/bin/gw"
+  fi
+
   info "enabling the gateway stack for boot"
   enable_stack
 
@@ -365,6 +380,20 @@ cmd_status() {
   esac
   [ -n "$detail" ] && printf '%s  %s%s\n' "$c_dim" "$detail" "$c_off"
   [ "$life" = "1" ] && printf 'lifeline    %sENGAGED%s — tailscaled is bypassing the tunnel\n' "$c_yel" "$c_off"
+
+  # Which code is actually running. A stale copy of this script at
+  # /usr/local/bin/gw survives every git pull, so the box keeps running an old
+  # CLI while the checkout says otherwise — and every fix you pull appears to
+  # have done nothing at all.
+  local head self
+  head=$(git -C "$REPO" log -1 --format='%h %cs' 2>/dev/null || echo "not a git checkout")
+  printf '%sversion     %s  (%s)%s\n' "$c_dim" "$head" "$REPO" "$c_off"
+  self=$(command -v gw 2>/dev/null || true)
+  if [ -n "$self" ] \
+     && [ "$(readlink -f "$self" 2>/dev/null)" != "$(readlink -f "$REPO/bin/gw" 2>/dev/null)" ]; then
+    warn "$self is not $REPO/bin/gw — you are running a stale copy, and"
+    warn "git pull will not change it. Fix: sudo ln -sfn $REPO/bin/gw $self"
+  fi
 
   if systemctl cat gateway.target >/dev/null 2>&1; then
     printf '%-11s %s (boot: %s)\n' "stack" \

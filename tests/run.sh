@@ -856,6 +856,41 @@ else
   bad "gw status dropped the Tailscale status line"
 fi
 
+# The failure this exists to catch: /usr/local/bin/gw as a COPY rather than a
+# symlink. It survives every git pull, so the box keeps running old code while
+# the checkout says otherwise, and every fix you pull appears to do nothing.
+# Capture before matching. `cmd | grep -q` exits at the first match, the writer
+# takes a SIGPIPE for the lines it had left, and `set -o pipefail` turns that
+# into a failed pipeline — a green test that only passes when it finds nothing.
+statout=$(GW_REPO="$PWD" bash bin/gw status 2>&1 || true)
+if printf '%s' "$statout" | grep -q 'version '; then
+  ok "gw status names the commit it is running"
+else
+  bad "gw status does not say which version is running"
+fi
+
+STALEDIR="$OUT/stalebin"; mkdir -p "$STALEDIR"
+cp bin/gw "$STALEDIR/gw"
+staleout=$(PATH="$STALEDIR:$PATH" GW_REPO="$PWD" bash bin/gw status 2>&1 || true)
+if printf '%s' "$staleout" | grep -q 'stale copy'; then
+  ok "gw status warns when the gw on PATH is a copy, not this repo"
+else
+  bad "a stale copy of gw on PATH goes unreported"
+fi
+LINKDIR2="$OUT/linkbin"; mkdir -p "$LINKDIR2"
+ln -sfn "$PWD/bin/gw" "$LINKDIR2/gw"
+linkout=$(PATH="$LINKDIR2:$PATH" GW_REPO="$PWD" bash bin/gw status 2>&1 || true)
+if printf '%s' "$linkout" | grep -q 'stale copy'; then
+  bad "gw status calls a correct symlink stale"
+else
+  ok "a symlink into the repo is not reported as stale"
+fi
+if sed -n '/^cmd_apply()/,/^}/p' bin/gw | grep -q 'ln -sfn "\$REPO/bin/gw"'; then
+  ok "gw apply repairs /usr/local/bin/gw into a symlink"
+else
+  bad "gw apply leaves a stale copy of gw installed"
+fi
+
 echo
 echo "== scheduled updates =="
 # Geodata had a daily timer; Xray and AdGuard had nothing at all. They updated
