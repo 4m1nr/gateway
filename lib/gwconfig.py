@@ -578,6 +578,20 @@ class Config:
         self.zram = bool(sy.get("zram", True))
         self.bbr = bool(sy.get("bbr", True))
         self.unattended = bool(sy.get("unattended_upgrades", True))
+
+        # What the scheduled updater does, if anything. Geodata already has
+        # its own daily timer; this covers the parts that otherwise never
+        # updated unless somebody remembered to run `gw update` by hand.
+        self.auto_update = str(sy.get("auto_update", "services"))
+        modes = ("off", "check", "services", "all")
+        if self.auto_update not in modes:
+            raise ConfigError(
+                f"system.auto_update must be one of {', '.join(modes)}, "
+                f"not {self.auto_update!r}"
+            )
+        self.auto_update_schedule = str(sy.get("auto_update_schedule", "weekly"))
+        if not self.auto_update_schedule.strip():
+            raise ConfigError("system.auto_update_schedule must not be empty")
         self.ssh_allow_lan = bool(sy.get("ssh_allow_lan", True))
         self.ssh_allow_tailnet = bool(sy.get("ssh_allow_tailnet", True))
 

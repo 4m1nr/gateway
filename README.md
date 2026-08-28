@@ -136,7 +136,7 @@ See `docs/per-client-policy.md`.
 | `gw web-passwd` | set the dashboard password |
 | `gw bench` | find the throughput bottleneck: link, CPU, or tunnel |
 | `gw history [h] [ip]` | what happened while you weren't looking — for faults that come and go |
-| `gw update` | `all` \| `xray` \| `adguard` \| `tailscale` \| `geo` \| `packages` \| `--check` |
+| `gw update` | `all` \| `services` \| `xray` \| `adguard` \| `tailscale` \| `geo` \| `packages` \| `--check` |
 | `gw panic` | drop to plain NAT so the LAN works while you debug |
 | `gw logs` | follow every relevant journal at once |
 
@@ -190,7 +190,36 @@ sudo gw update xray v25.9.11    # a specific version
 sudo gw update adguard          # AdGuard Home
 sudo gw update tailscale        # via apt
 sudo gw update geo              # geodata only
+sudo gw update services         # geodata + Xray + AdGuard, no apt
 sudo gw update                  # everything, then re-apply
+```
+
+### What updates on its own
+
+| | schedule | set by |
+|---|---|---|
+| geodata (`.dat` files) | daily | `gw-geoupdate.timer` |
+| Xray, AdGuard Home, geodata | weekly | `gw-update.timer`, `[system] auto_update` |
+| OS security patches | daily | `unattended-upgrades`, `[system] unattended_upgrades` |
+| Tailscale, other packages | never | run `sudo gw update tailscale` / `packages` |
+
+`[system] auto_update` takes `off`, `check` (report only), `services` (the
+default — geodata, Xray, AdGuard), or `all` (adds a full `apt upgrade` and a
+re-apply). `auto_update_schedule` is any systemd `OnCalendar`, validated by
+`gw apply` before it is installed, because an expression systemd cannot parse
+produces a timer that loads and then never fires.
+
+`services` is the default rather than `all` because each of those three tests
+itself and rolls back if the new version will not start; an unattended
+`apt upgrade` on the box the whole house routes through does not. Nothing
+here reboots on its own — an unattended reboot takes the LAN's internet with
+it.
+
+Check that it is actually running:
+
+```bash
+systemctl list-timers 'gw-*'    # next and last run of each
+journalctl -u gw-update         # what the last one did
 ```
 
 An update that breaks the tunnel takes the whole LAN offline, so Xray and

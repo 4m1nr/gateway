@@ -1,0 +1,16 @@
+[Unit]
+Description=Scheduled gateway component update
+
+PartOf=gateway.target
+
+[Timer]
+OnCalendar={{AUTO_UPDATE_ONCALENDAR}}
+# Spread across an hour: every gateway built from this repo would otherwise
+# ask GitHub for a release at the same instant.
+RandomizedDelaySec=1h
+# Catch up after downtime. A box that is off every Sunday would otherwise
+# never update at all.
+Persistent=true
+
+[Install]
+WantedBy=gateway.target

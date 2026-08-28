@@ -17,7 +17,7 @@
 #   gw client        add/remove/list per-client policy
 #   gw job           add/remove/list scheduled jobs
 #   gw web-passwd    set the dashboard password
-#   gw update        all | xray | adguard | geo | packages | --check
+#   gw update        all | services | xray | adguard | geo | packages | --check
 #   gw panic         disable interception, plain NAT, keep the LAN online
 #   gw logs          follow the relevant journals
 set -euo pipefail
@@ -72,7 +72,7 @@ AGH_YAML=/opt/AdGuardHome/AdGuardHome.yaml
 # gateway.target is the umbrella; the rest are its members. tailscaled is
 # deliberately absent — it is Wanted by the target but not PartOf it, so
 # restarting the stack cannot drop the session you are managing it over.
-STACK=(gateway.target gw-network.service xray.service gw-web.service gw-health.timer gw-geoupdate.timer)
+STACK=(gateway.target gw-network.service xray.service gw-web.service gw-health.timer gw-geoupdate.timer gw-update.timer)
 NFT_LIVE=/etc/nftables.d/gateway.nft
 
 c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_dim=$'\033[2m'; c_off=$'\033[0m'
@@ -97,7 +97,15 @@ cmd_render() {
 # Compares the staged tree against the live filesystem. Returns 1 if anything
 # differs, which is what apply uses to decide whether a reload is needed.
 cmd_diff() {
-  [ -d "$BUILD" ] || cmd_render >/dev/null
+  # Always render. This used to render only when build/ was missing, so after
+  # the first apply it compared last time's build tree against the files
+  # installed from that very tree — identical by construction. `gw diff` then
+  # reported "no changes" no matter what you had just edited in gateway.toml,
+  # which is worse than no diff at all: it actively tells you your edit did
+  # nothing.
+  cmd_render >/dev/null \
+    || die "render failed. Run 'gw render' to see the error (and note that
+    writing build/ needs write access to $REPO)."
   local changed=0
   while IFS= read -r -d '' staged; do
     local rel="${staged#"$BUILD"/}"
@@ -135,6 +143,17 @@ cmd_apply() {
   cmd_diff || true
   if [ "$dry" -eq 1 ]; then info "dry run — nothing written"; return 0; fi
 
+  # An OnCalendar systemd cannot parse does not fail loudly: the timer unit
+  # loads, never fires, and the setting reads as if it worked. Checked before
+  # anything is installed, so a typo cannot leave a dead timer behind.
+  local cal_unit="$BUILD/etc/systemd/system/gw-update.timer" cal
+  if [ -f "$cal_unit" ] && command -v systemd-analyze >/dev/null 2>&1; then
+    cal=$(sed -n 's/^OnCalendar=//p' "$cal_unit")
+    systemd-analyze calendar "$cal" >/dev/null 2>&1 \
+      || die "system.auto_update_schedule = \"$cal\" is not a valid systemd
+    OnCalendar expression. Try: weekly, daily, or \"Sun 04:00\"."
+  fi
+
   info "installing files"
   while IFS= read -r -d '' staged; do
     local rel="${staged#"$BUILD"/}"
@@ -151,6 +170,19 @@ cmd_apply() {
     esac
     install -D -m "$mode" "$staged" "$live"
   done < <(find "$BUILD" -type f -print0)
+
+  # A unit that stopped being rendered has to stop being installed. Otherwise
+  # turning the scheduled updater off leaves it enabled and firing on the old
+  # schedule: the setting looks like it worked and changes nothing.
+  local stale
+  for stale in gw-update.timer gw-update.service; do
+    if [ ! -f "$BUILD/etc/systemd/system/$stale" ] \
+       && [ -f "/etc/systemd/system/$stale" ]; then
+      info "removing $stale (no longer in the config)"
+      systemctl disable --now "$stale" >/dev/null 2>&1 || true
+      rm -f "/etc/systemd/system/$stale"
+    fi
+  done
 
   info "applying sysctl"
   sysctl --system >/dev/null
@@ -408,7 +440,27 @@ cmd_status() {
     printf 'dashboard   %s://%s:%s\n' "$wscheme" "$(gw_env BOX_IP)" "$wport"
   fi
 
-  command -v tailscale >/dev/null && tailscale status --peers=false 2>/dev/null | head -3 || true
+  if command -v tailscale >/dev/null 2>&1; then
+    local ts self health hline
+    ts=$(tailscale status --peers=false 2>/dev/null || true)
+    if [ -z "$ts" ]; then
+      printf 'tailscale   %snot logged in, or tailscaled is not answering%s\n' \
+        "$c_yel" "$c_off"
+    else
+      self=$(printf '%s\n' "$ts" | grep -v '^#' | grep -v '^$' | head -1)
+      [ -n "$self" ] && printf 'tailscale   %s\n' "$self"
+      # `head -3` used to cut this off one line into the "# Health check:"
+      # header — printing the heading and hiding every warning underneath it,
+      # which is the only part that says what is wrong.
+      health=$(printf '%s\n' "$ts" | sed -n '/# Health check:/,$p' \
+               | sed '1d; s/^#[[:space:]]*//; s/^-[[:space:]]*//' | grep -v '^$' || true)
+      while IFS= read -r hline; do
+        [ -n "$hline" ] && printf '%s  health: %s%s\n' "$c_yel" "$hline" "$c_off"
+      done <<EOFHEALTH
+$health
+EOFHEALTH
+    fi
+  fi
 }
 
 # ----------------------------------------------------------------- check ----
@@ -418,8 +470,11 @@ cmd_check() { need_root check; "$REPO/scripts/90-verify.sh" "$@"; }
 # nft prints a set's elements across several lines once there are more than a
 # few, so a single-line sed silently reports an empty set. Join first.
 gw_set_elements() {
+  # Tabs as well as newlines: nft wraps a long element list and indents the
+  # continuation with tabs, so squeezing spaces alone leaves a ragged gap in
+  # the middle of the list.
   nft list set inet gateway "$1" 2>/dev/null \
-    | tr '\n' ' ' \
+    | tr '\n\t' '  ' \
     | sed -n 's/.*elements = {\([^}]*\)}.*/\1/p' \
     | tr -s ' ' \
     | sed 's/^ //; s/ $//'
@@ -961,6 +1016,21 @@ cmd_update() {
       apt-get update -qq && apt-get -y upgrade
       apt_proxy_off
       ;;
+    services)
+      # What the scheduled updater runs by default: the three things nothing
+      # else keeps current, each of which tests itself and rolls back. apt is
+      # left to unattended-upgrades, which does security only — an unattended
+      # full `apt upgrade` on the box the whole house routes through is a
+      # bigger bet than a binary that reverts when it fails to start.
+      info "updating geodata"
+      /usr/local/lib/gateway/geoupdate.sh || warn "geodata update failed"
+      info "updating Xray"
+      /usr/local/lib/gateway/xray-update.sh latest || warn "Xray update failed"
+      if [ -x /opt/AdGuardHome/AdGuardHome ]; then
+        info "updating AdGuard Home"
+        /usr/local/lib/gateway/adguard-update.sh latest || warn "AdGuard update failed"
+      fi
+      ;;
     all)
       # Ordered least- to most-disruptive, and each step is survivable on its
       # own: geodata rolls back, both binaries roll back, apt is apt.
@@ -981,7 +1051,7 @@ cmd_update() {
       ;;
     *)
       die "unknown update target: $what
-  try: all | xray [version] | adguard [version] | tailscale | geo | packages | --check"
+  try: all | services | xray [version] | adguard [version] | tailscale | geo | packages | --check"
       ;;
   esac
 }

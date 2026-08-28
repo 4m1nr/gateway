@@ -424,6 +424,22 @@ journal_max_use  = "200M"
 zram             = true
 bbr              = true
 unattended_upgrades = true
+
+# What the scheduled updater does, and when. Geodata has its own daily timer
+# regardless; this covers everything else, which otherwise only ever updated
+# when someone remembered to run `gw update` by hand.
+#
+#   off        no timer at all
+#   check      report what is available, change nothing (journal + `gw logs`)
+#   services   geodata, Xray and AdGuard Home  <- the default
+#   all        the above plus a full `apt upgrade`, then re-apply the config
+#
+# "services" is the default because each of those three tests itself and rolls
+# back if the new version will not start, which an unattended `apt upgrade` on
+# the box the whole house routes through does not. Security patches still
+# arrive through unattended_upgrades above.
+auto_update          = "services"
+auto_update_schedule = "weekly"   # any systemd OnCalendar: "Sun 04:00", "daily"
 # SSH stays reachable from these sources only.
 ssh_allow_lan    = true
 ssh_allow_tailnet = true

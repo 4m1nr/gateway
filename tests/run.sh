@@ -790,6 +790,154 @@ else
 fi
 
 echo
+echo "== gw diff reflects the config you just edited =="
+# It used to render only when build/ was missing. After the first apply that
+# meant comparing last time's build tree against the files installed from it —
+# identical by construction — so `gw diff` answered "no changes" whatever you
+# had edited. Silent and confident, which is the worst combination.
+if sed -n '/^cmd_diff()/,/^}/p' bin/gw | grep -q '\[ -d "\$BUILD" \]'; then
+  bad "gw diff renders only when build/ is missing, so it compares a stale tree"
+else
+  ok "gw diff has no stale-build shortcut"
+fi
+
+# The fixture's outbound is a relative path, resolved against the config's own
+# directory, so a copy needs the outbounds tree beside it.
+cp -r tests/fixtures/outbounds "$OUT/outbounds"
+DIFFCFG="$OUT/diff-edit.toml"
+cp tests/fixtures/default.toml "$DIFFCFG"
+GW_REPO="$PWD" GW_CONFIG="$DIFFCFG" bash bin/gw diff >/dev/null 2>&1 || true
+before=$(cat build/usr/local/lib/gateway/env 2>/dev/null || echo missing)
+sed -i 's/^tproxy_port.*/tproxy_port = 12346/' "$DIFFCFG"
+GW_REPO="$PWD" GW_CONFIG="$DIFFCFG" bash bin/gw diff >/dev/null 2>&1 || true
+after=$(cat build/usr/local/lib/gateway/env 2>/dev/null || echo missing)
+if [ "$before" != "$after" ] && printf '%s' "$after" | grep -q 'TPROXY_PORT="12346"'; then
+  ok "editing gateway.toml changes what gw diff compares"
+else
+  bad "gw diff did not re-render after the config changed"
+fi
+
+echo
+echo "== status reads back cleanly =="
+# nft wraps a long element list and indents the continuation with TABS, so
+# squeezing spaces alone leaves a ragged gap in the middle of the list.
+setout=$(
+  eval "$(sed -n '/^gw_set_elements()/,/^}/p' bin/gw)"
+  nft() { printf 'table inet gateway {\n\tset proxy_clients {\n\t\ttype ipv4_addr\n\t\tflags interval\n\t\telements = { 100.64.0.0/10, 192.168.1.20,\n\t\t\t     192.168.1.87 }\n\t}\n}\n'; }
+  gw_set_elements proxy_clients
+)
+if [ "$setout" = "100.64.0.0/10, 192.168.1.20, 192.168.1.87" ]; then
+  ok "wrapped nft set elements read back on one clean line"
+else
+  bad "set elements came back as '$setout'"
+fi
+
+# `tailscale status | head -3` cut off one line into the "# Health check:"
+# header: it printed the heading and hid every warning under it, which is the
+# only part that says what is wrong.
+TSBIN="$OUT/tsbin"; mkdir -p "$TSBIN"
+cat > "$TSBIN/tailscale" <<'TSEOF'
+#!/bin/sh
+printf '100.86.70.57  gateway  someone@  linux  idle; offers exit node\n\n'
+printf '# Health check:\n#     - not connected to home DERP region 1\n'
+printf '#     - Tailscale can not reach the configured DNS servers\n'
+TSEOF
+chmod +x "$TSBIN/tailscale"
+tsout=$(PATH="$TSBIN:$PATH" GW_REPO="$PWD" bash bin/gw status 2>&1 || true)
+if printf '%s' "$tsout" | grep -q 'not connected to home DERP' \
+   && printf '%s' "$tsout" | grep -q 'reach the configured DNS'; then
+  ok "gw status shows every Tailscale health warning, not just the heading"
+else
+  bad "gw status truncates Tailscale's health check"
+fi
+if printf '%s' "$tsout" | grep -q '100.86.70.57'; then
+  ok "gw status still shows the Tailscale address line"
+else
+  bad "gw status dropped the Tailscale status line"
+fi
+
+echo
+echo "== scheduled updates =="
+# Geodata had a daily timer; Xray and AdGuard had nothing at all. They updated
+# only when somebody remembered to run `gw update` by hand, which is not what
+# "auto updates" means to anyone.
+if grep -q '^    services)' bin/gw; then
+  ok "gw update services exists (what the timer runs)"
+else
+  bad "gw update has no 'services' target for the scheduled updater"
+fi
+
+# The setting has to exist in the example, or every mode below silently tests
+# the same default.
+if grep -q '^auto_update ' tests/fixtures/default.toml; then
+  ok "auto_update is a documented setting, not an undocumented flag"
+else
+  bad "auto_update is missing from gateway.example.toml"
+fi
+
+for mode in check services all; do
+  cfg="$OUT/au-$mode.toml"
+  sed "s/^auto_update  *=.*/auto_update = \"$mode\"/" tests/fixtures/default.toml > "$cfg"
+  if python3 lib/render.py "$cfg" "$OUT/au-$mode" >/dev/null 2>&1 \
+     && grep -q "gw update $mode\$" "$OUT/au-$mode/etc/systemd/system/gw-update.service"; then
+    ok "auto_update=$mode renders a timer that runs exactly that"
+  else
+    bad "auto_update=$mode did not render a matching gw-update.service"
+  fi
+done
+
+cfg="$OUT/au-off.toml"
+sed 's/^auto_update  *=.*/auto_update = "off"/' tests/fixtures/default.toml > "$cfg"
+if python3 lib/render.py "$cfg" "$OUT/au-off" >/dev/null 2>&1; then
+  if [ -f "$OUT/au-off/etc/systemd/system/gw-update.timer" ]; then
+    bad "auto_update=off still renders the update timer"
+  else
+    ok "auto_update=off renders no update timer"
+  fi
+else
+  bad "auto_update=off was rejected by the renderer"
+fi
+
+# Turning it off has to remove the installed unit too, or the old schedule
+# keeps firing and the setting reads as if it worked.
+if grep -q 'removing \$stale (no longer in the config)' bin/gw; then
+  ok "gw apply removes an update unit that is no longer rendered"
+else
+  bad "gw apply leaves a de-configured gw-update unit installed and enabled"
+fi
+
+cfg="$OUT/au-bad.toml"
+sed 's/^auto_update  *=.*/auto_update = "sometimes"/' tests/fixtures/default.toml > "$cfg"
+if python3 lib/render.py "$cfg" "$OUT/au-bad" >/dev/null 2>&1; then
+  bad "an unknown auto_update mode was accepted"
+else
+  ok "an unknown auto_update mode is rejected"
+fi
+
+# An OnCalendar systemd cannot parse loads fine and then never fires.
+if grep -q 'systemd-analyze calendar' bin/gw; then
+  ok "gw apply validates the update schedule before installing it"
+else
+  bad "gw apply installs the update timer without checking its OnCalendar"
+fi
+cal=$(sed -n 's/^OnCalendar=//p' "$OUT/au-services/etc/systemd/system/gw-update.timer")
+if command -v systemd-analyze >/dev/null 2>&1; then
+  if systemd-analyze calendar "$cal" >/dev/null 2>&1; then
+    ok "the default update schedule ('$cal') is a valid OnCalendar"
+  else
+    bad "the default update schedule ('$cal') is not a valid OnCalendar"
+  fi
+else
+  ok "systemd-analyze unavailable; skipping the OnCalendar check"
+fi
+
+if grep -q 'gw-update.timer' bin/gw; then
+  ok "gw-update.timer is part of the managed stack"
+else
+  bad "gw-update.timer is not in STACK, so enable/disable ignore it"
+fi
+
+echo
 echo "== entry points resolve through symlinks =="
 # The documented install symlinks /usr/local/bin/gw -> /opt/gateway/bin/gw.
 # $BASH_SOURCE and $0 report the symlink, not its target, so an unresolved

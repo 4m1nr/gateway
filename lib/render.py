@@ -391,6 +391,8 @@ def render(cfg: Config, out: pathlib.Path) -> list[str]:
             continue
         if unit.name == "gw-web.service" and not cfg.web_enabled:
             continue
+        if unit.name.startswith("gw-update.") and cfg.auto_update == "off":
+            continue
         text = unit.read_text()
         if "{{" in text:
             text = subst(
@@ -399,6 +401,8 @@ def render(cfg: Config, out: pathlib.Path) -> list[str]:
                     "HEALTH_INTERVAL": str(cfg.health_interval),
                     "TARGET_WANTS": target_wants(cfg),
                     "REPO": str(ROOT),
+                    "AUTO_UPDATE_MODE": cfg.auto_update,
+                    "AUTO_UPDATE_ONCALENDAR": cfg.auto_update_schedule,
                 },
             )
         files[f"etc/systemd/system/{unit.name}"] = text
