@@ -12,6 +12,7 @@
 #   gw check         end-to-end verification, including leak tests
 #   gw diag [ip]     why a client's traffic is or is not being intercepted
 #   gw trace <ip>    follow one client's packets rule by rule, live
+#   gw history [h]   what happened while you were not looking (intermittent faults)
 #   gw bench         find the throughput bottleneck
 #   gw client        add/remove/list per-client policy
 #   gw job           add/remove/list scheduled jobs
@@ -684,6 +685,196 @@ HINT
 }
 
 # ---------------------------------------------------------------- client ----
+# --------------------------------------------------------------- history ----
+# For faults that come and go.
+#
+# `gw diag` and `gw trace` only see the present. An outage that ended ten
+# minutes ago leaves nothing for them to look at, so an intermittent fault
+# defeats both: by the time anyone runs them, the box looks healthy — and it
+# IS healthy, which is why guessing from a clean report goes nowhere.
+#
+# This reads back what was recorded while it happened. The first question is
+# the one that halves the search: was the GATEWAY down when the client was?
+cmd_history() {
+  local hours=48 client="" arg
+  for arg in "$@"; do
+    case "$arg" in
+      *.*.*.*) client="$arg" ;;
+      *[!0-9]*) die "usage: gw history [hours] [client-ip]" ;;
+      *) hours="$arg" ;;
+    esac
+  done
+  local since="-${hours}h" line
+
+  printf '%s== tunnel outages seen by the health probe (last %sh) ==%s\n' \
+    "$c_grn" "$hours" "$c_off"
+  local health
+  health=$(journalctl -t gw-health --since "$since" --no-pager -o short-iso 2>/dev/null \
+           | grep -E 'probe failed|INTERCEPTION|healthy again|lifeline|restarting xray|conntrack' \
+           || true)
+  if [ -n "$health" ]; then
+    printf '%s\n' "$health" | sed 's/^/  /'
+  else
+    printf '  %snone. The probe ran every %ss and never failed.%s\n' \
+      "$c_dim" "$(gw_env INTERVAL || true)" "$c_off"
+    printf '  %sIf the client lost the internet inside this window, the tunnel was\n' "$c_dim"
+    printf '   up while that happened: look between the client and this box\n'
+    printf '   (DNS, wifi, the client gateway setting), not at the tunnel.%s\n' "$c_off"
+  fi
+
+  printf '\n%s== service restarts ==%s\n' "$c_grn" "$c_off"
+  printf '  %severy xray restart drops every live connection on every client.%s\n' \
+    "$c_dim" "$c_off"
+  local unit n
+  for unit in xray AdGuardHome tailscaled gw-web; do
+    systemctl list-unit-files "$unit.service" >/dev/null 2>&1 || continue
+    line=$(journalctl -u "$unit" --since "$since" --no-pager -o short-iso 2>/dev/null \
+           | grep -E 'Started|Stopped|Main process exited|Scheduled restart|Failed with result' \
+           || true)
+    n=$(printf '%s' "$line" | grep -c 'Started' || true)
+    printf '  %-12s %s start(s)\n' "$unit" "${n:-0}"
+    [ -n "$line" ] && printf '%s\n' "$line" | tail -12 | sed 's/^/      /'
+  done
+
+  printf '\n%s== kernel complaints ==%s\n' "$c_grn" "$c_off"
+  line=$(journalctl -k --since "$since" --no-pager -o short-iso 2>/dev/null \
+         | grep -iE 'conntrack table full|nf_conntrack: table full|Out of memory|oom-kill|martian|Link is Down|link is not ready|carrier lost|TX unit hang|reset adapter' \
+         || true)
+  if [ -n "$line" ]; then
+    printf '%s\n' "$line" | tail -25 | sed 's/^/  /'
+    case "$line" in
+      *"table full"*) printf '  %s^ conntrack filled: NEW connections were dropped while it was full.\n' "$c_red"
+                      printf '    That looks exactly like "the internet stopped for a bit".%s\n' "$c_off" ;;
+    esac
+    case "$line" in
+      *"ut of memory"*|*oom-kill*) printf '  %s^ the OOM killer ran. If it took xray, every connection died with it.%s\n' "$c_red" "$c_off" ;;
+    esac
+  else
+    printf '  %snone%s\n' "$c_dim" "$c_off"
+  fi
+
+  printf '\n%s== pressure right now ==%s\n' "$c_grn" "$c_off"
+  local cur max pct
+  cur=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+  max=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
+  pct=0; [ "$max" -gt 0 ] && pct=$((cur * 100 / max))
+  printf '  conntrack : %s/%s (%s%%)\n' "$cur" "$max" "$pct"
+  [ "$pct" -ge 60 ] && printf '    %s^ high. A phone on QUIC opens a lot of UDP flows; raise\n' "$c_yel" \
+    && printf '      net.netfilter.nf_conntrack_max, or shorten the UDP timeout.%s\n' "$c_off"
+  printf '  memory    : %s\n' "$(free -h 2>/dev/null | awk '/^Mem:/{printf "%s total, %s available", $2, $7}')"
+  printf '  xray rss  : %s\n' \
+    "$(ps -o rss= -C xray 2>/dev/null | awk '{s+=$1} END{printf "%.0f MB", s/1024}')"
+  printf '  load      : %s\n' "$(cut -d' ' -f1-3 /proc/loadavg)"
+  printf '  uptime    : %s\n' "$(uptime -p 2>/dev/null || true)"
+
+  # The ring buffer health.sh keeps in tmpfs: one line per probe, so an outage
+  # that never tripped a threshold still leaves a trace.
+  local hist=/run/gateway/history
+  if [ -s "$hist" ]; then
+    printf '\n%s== recorded samples ==%s (%s lines, oldest %s)\n' \
+      "$c_grn" "$c_off" "$(wc -l < "$hist")" "$(head -1 "$hist" | cut -d' ' -f1)"
+    printf '  %snon-up samples, newest last:%s\n' "$c_dim" "$c_off"
+    line=$(grep -v ' up ' "$hist" | tail -20 || true)
+    if [ -n "$line" ]; then printf '%s\n' "$line" | sed 's/^/  /'
+    else printf '  %severy sample says up%s\n' "$c_dim" "$c_off"; fi
+    printf '  %slast 5:%s\n' "$c_dim" "$c_off"
+    tail -5 "$hist" | sed 's/^/  /'
+  else
+    printf '\n%s== recorded samples ==%s\n' "$c_grn" "$c_off"
+    printf '  %snone yet (%s is written by the health timer; it starts empty\n' "$c_dim" "$hist"
+    printf '   after a reboot and fills at one line per probe)%s\n' "$c_off"
+  fi
+
+  # The other half of the split. If the box was healthy the whole time, the
+  # next question is whether the client was still talking to it at all — and
+  # AdGuard already wrote that down, one line per query, with the client IP.
+  # A gap here means the client stopped asking: it fell back to another
+  # resolver, or it was off the wifi entirely. Neither is a gateway fault.
+  printf '\n%s== DNS queries per hour%s ==%s\n' "$c_grn" \
+    "$([ -n "$client" ] && printf ' from %s' "$client")" "$c_off"
+  local agh="${GW_AGH_LOG:-/opt/AdGuardHome/data/querylog.json}"
+  if [ -r "$agh" ]; then
+    GW_CLIENT="$client" GW_HOURS="$hours" $PY - "$agh" "$agh.1" <<'PYLOG'
+import json, os, sys, time
+client = os.environ.get("GW_CLIENT") or ""
+window = int(os.environ.get("GW_HOURS") or 48) * 3600
+cutoff = time.time() - window
+buckets = {}
+for path in sys.argv[1:]:
+    try:
+        fh = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        continue
+    with fh:
+        for line in fh:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if client and rec.get("IP") != client:
+                continue
+            stamp = (rec.get("T") or "")[:19]
+            try:
+                secs = time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%S"))
+            except ValueError:
+                continue
+            if secs < cutoff:
+                continue
+            buckets[stamp[:13]] = buckets.get(stamp[:13], 0) + 1
+if not buckets:
+    print("  no queries in this window" + (" from " + client if client else ""))
+    print("  ^ if the client was online and using this box for DNS, there would")
+    print("    be some. Check what resolver it is actually using.")
+    raise SystemExit
+hours = sorted(buckets)
+widest = max(buckets.values())
+start = time.strptime(hours[0] + ":00:00", "%Y-%m-%dT%H:%M:%S")
+cursor = time.mktime(start)
+end = time.mktime(time.strptime(hours[-1] + ":00:00", "%Y-%m-%dT%H:%M:%S"))
+while cursor <= end:
+    key = time.strftime("%Y-%m-%dT%H", time.localtime(cursor))
+    count = buckets.get(key, 0)
+    bar = "#" * max(1, count * 40 // widest) if count else ""
+    flag = "" if count else "   <- silence"
+    print("  %s  %6d %s%s" % (key.replace("T", " ") + ":00", count, bar, flag))
+    cursor += 3600
+PYLOG
+  else
+    printf '  %s%s is not readable — run this as root, or AdGuard query logging is off%s\n' \
+      "$c_dim" "$agh" "$c_off"
+  fi
+
+  cat <<'HINT'
+
+Reading this:
+  outages listed, client dropped at the same time   the tunnel. Look at the
+                                                    xray journal at that
+                                                    timestamp.
+  no outages, but xray restarted                    the restart WAS the outage.
+                                                    Every connection dies with
+                                                    it; the client notices, the
+                                                    probe does not.
+  no outages, no restarts                           the box was fine while the
+                                                    client was not. Read the DNS
+                                                    histogram next.
+  DNS silent during the outage                      the client stopped asking
+                                                    this box: it left the wifi,
+                                                    or it fell back to another
+                                                    resolver. Not a gateway
+                                                    fault.
+  DNS steady through the outage                     the client kept resolving
+                                                    but could not move data —
+                                                    the data path, not DNS.
+  conntrack full / OOM                              cause found; both drop new
+                                                    connections while they last.
+
+Run it with the client IP to get that histogram: gw history 48 192.168.1.87
+HINT
+}
+
 cmd_client() { $PY "$REPO/lib/clients.py" "$CONFIG" "$@"; }
 cmd_job()    { $PY "$REPO/lib/jobs.py"    "$CONFIG" "$@"; }
 
@@ -849,6 +1040,7 @@ case "${1:-}" in
   check)  shift; cmd_check "$@" ;;
   diag)   shift; cmd_diag "$@" ;;
   trace)  shift; cmd_trace "$@" ;;
+  history) shift; cmd_history "$@" ;;
   bench)  shift; cmd_bench "$@" ;;
   client) shift; cmd_client "$@" ;;
   job)    shift; cmd_job "$@" ;;

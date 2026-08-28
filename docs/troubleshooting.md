@@ -215,6 +215,45 @@ instead of being intercepted. No log lines and no counters means the packets
 are not arriving — check the client's default gateway, and that its address is
 inside `net.lan_cidr`.
 
+## A client's internet drops out now and then, and comes back
+
+The hard part of this one is that every live command lies to you. By the time
+you run `gw diag` the box is healthy — and it really is healthy, so a clean
+report proves nothing and invites a guess. Read what was recorded instead:
+
+```bash
+sudo gw history 48 <client-ip>
+```
+
+It answers, in order:
+
+1. **Did the health probe see an outage?** If it did, the timestamps line up
+   with the client's and the fault is the tunnel — go read the Xray journal at
+   that moment.
+2. **Did Xray restart?** A restart drops every live connection on every client.
+   The client notices immediately; the probe, thirty seconds later, sees a
+   healthy tunnel and reports nothing wrong. So "no outage logged, but xray
+   restarted" means *the restart was the outage*.
+3. **Did conntrack fill, or did the OOM killer run?** Both drop new connections
+   while leaving established ones alone, which on a phone looks exactly like
+   the internet coming and going. A gateway holds far more flows than a
+   workstation, and a phone on QUIC opens a lot of them; the health probe warns
+   at 80% so you see it coming.
+4. **Was the client still asking this box for DNS?** The per-hour histogram
+   comes from AdGuard's own query log. An hour marked `<- silence` means the
+   client stopped asking — it left the wifi, or fell back to another resolver.
+   Steady queries through the outage means DNS was fine and the data path was
+   not.
+
+Two things that look like gateway faults and are not:
+
+- **A phone roaming between APs, or its wifi sleeping.** The gap shows up in
+  the DNS histogram and nowhere else on the box.
+- **Android's connectivity check.** Android decides a network is "no internet"
+  from its own probe to a Google endpoint. Over a high-latency tunnel that
+  probe can time out while everything else works, and Android will then show
+  the warning — and on some builds silently switch to mobile data.
+
 ## A client bypasses the tunnel
 
 - IPv6. Check `ip -6 addr show` on the *client*. If it has a global v6 address,

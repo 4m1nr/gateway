@@ -614,6 +614,158 @@ else
 fi
 
 echo
+echo "== intermittent-fault evidence =="
+# A fault that comes and go defeats every live command: by the time anyone runs
+# `gw diag` the box is healthy again, and healthy is exactly what it reports.
+# So the box has to record while it happens, and gw history has to read it back.
+if grep -q 'history) shift; cmd_history' bin/gw && grep -q '^#   gw history' bin/gw; then
+  ok "gw history is dispatched and documented"
+else
+  bad "gw history is missing from the dispatcher or the usage block"
+fi
+
+if bash bin/gw help 2>/dev/null | grep -q 'gw history'; then
+  ok "gw help lists history"
+else
+  bad "gw help does not list history"
+fi
+
+if grep -q 'STATE/history' templates/lib/health.sh; then
+  ok "the health probe records one sample per run"
+else
+  bad "the health probe records nothing, so an intermittent fault leaves no trace"
+fi
+
+# The ring buffer lives in tmpfs and must be bounded, or a box up for months
+# fills /run.
+if grep -q 'tail -n "\$KEEP" "\$STATE/history"' templates/lib/health.sh; then
+  ok "the sample ring buffer is trimmed"
+else
+  bad "the sample ring buffer grows without bound in tmpfs"
+fi
+
+# Restarting Xray drops every live connection on every client. A watchdog that
+# does that on one timed-out probe manufactures the outage it exists to catch.
+probe_curls=$(sed -n '/^probe_intercepted()/,/^}/p' templates/lib/health.sh | grep -c 'curl ')
+if [ "$probe_curls" -ge 2 ]; then
+  ok "the health probe retries before declaring a failure ($probe_curls attempts)"
+else
+  bad "the health probe declares failure on a single timeout, and the failure path restarts Xray"
+fi
+
+if grep -q 'NOT restarting xray' templates/lib/health.sh; then
+  ok "a tunnel that is moving bytes is not restarted out from under its clients"
+else
+  bad "the health probe restarts Xray even when the tunnel is demonstrably passing traffic"
+fi
+
+# The evidence that guard depends on: sum the downlink of real outbounds only.
+# Direct and block prove nothing about the tunnel, and uplink only proves
+# something wrote into a socket that may already be dead.
+python3 - <<'PYEXTRACT' > "$OUT/downlink.awk"
+import re, pathlib
+src = pathlib.Path("templates/lib/health.sh").read_text()
+m = re.search(r"awk -F'\"' '(.*?)'\n", src, re.S)
+if not m:
+    raise SystemExit("could not find the stats awk program in health.sh")
+print(m.group(1))
+PYEXTRACT
+cat > "$OUT/stats.json" <<'PYSTATS'
+{
+ "stat": [
+  {
+   "name": "outbound>>>proxy>>>traffic>>>downlink",
+   "value": "1000"
+  },
+  {
+   "name": "outbound>>>proxy>>>traffic>>>uplink",
+   "value": "500"
+  },
+  {
+   "name": "outbound>>>direct>>>traffic>>>downlink",
+   "value": "9999"
+  },
+  {
+   "name": "outbound>>>block>>>traffic>>>downlink",
+   "value": "4"
+  },
+  {
+   "name": "inbound>>>tproxy>>>traffic>>>downlink",
+   "value": "7777"
+  },
+  {
+   "name": "outbound>>>work>>>traffic>>>downlink",
+   "value": "23"
+  }
+ ]
+}
+PYSTATS
+got=$(awk -F'"' -f "$OUT/downlink.awk" "$OUT/stats.json" 2>&1)
+if [ "$got" = "1023" ]; then
+  ok "tunnel downlink counts proxied outbounds only (1000+23)"
+else
+  bad "tunnel downlink parse returned '$got', expected 1023 (direct/block/uplink/inbound must not count)"
+fi
+
+# The other half of the split: AdGuard already records, per client, whether the
+# client was still asking this box anything. A gap there is the client leaving,
+# not the gateway failing — and the histogram has to show the gap, not skip it.
+AGHDIR="$OUT/agh"; mkdir -p "$AGHDIR"
+python3 - "$AGHDIR/querylog.json" <<'PYAGH'
+import json, pathlib, sys, time
+now = time.time()
+lines = []
+for hour in (5, 4, 2, 1, 0):          # hour 3 is deliberately missing
+    for i in range(10):
+        stamp = time.localtime(now - hour * 3600 - i * 10)
+        lines.append(json.dumps({"T": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", stamp),
+                                 "IP": "192.168.1.87"}))
+lines.append(json.dumps({"T": time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.localtime(now)),
+                         "IP": "192.168.1.99"}))
+pathlib.Path(sys.argv[1]).write_text("\n".join(lines) + "\n")
+PYAGH
+hist=$(GW_AGH_LOG="$AGHDIR/querylog.json" GW_REPO="$PWD" bash bin/gw history 6 192.168.1.87 2>&1 \
+       | sed -n '/DNS queries/,/^$/p')
+if printf '%s' "$hist" | grep -q 'silence'; then
+  ok "the DNS histogram flags the hour the client went quiet"
+else
+  bad "the DNS histogram does not show a gap in client queries"
+fi
+if [ "$(printf '%s' "$hist" | grep -c '^  20')" -eq 6 ]; then
+  ok "the DNS histogram prints every hour in the window, gaps included"
+else
+  bad "the DNS histogram skipped hours: $(printf '%s' "$hist" | grep -c '^  20') rows, expected 6"
+fi
+# Another client's queries must not fill in this client's silence.
+if printf '%s' "$hist" | grep -q '192.168.1.99'; then
+  bad "the DNS histogram is not filtered by client"
+else
+  ok "the DNS histogram counts only the client asked about"
+fi
+
+# A stat whose value Xray omits (it omits zeroes) must not hand its name to the
+# next stat's value.
+cat > "$OUT/stats-sparse.json" <<'PYSPARSE'
+{
+ "stat": [
+  {
+   "name": "outbound>>>proxy>>>traffic>>>downlink"
+  },
+  {
+   "name": "outbound>>>direct>>>traffic>>>downlink",
+   "value": "9999"
+  }
+ ]
+}
+PYSPARSE
+got=$(awk -F'"' -f "$OUT/downlink.awk" "$OUT/stats-sparse.json" 2>&1)
+if [ "$got" = "0" ]; then
+  ok "an omitted stat value is not misattributed to the next stat"
+else
+  bad "omitted stat value misparsed: got '$got', expected 0"
+fi
+
+echo
 echo "== entry points resolve through symlinks =="
 # The documented install symlinks /usr/local/bin/gw -> /opt/gateway/bin/gw.
 # $BASH_SOURCE and $0 report the symlink, not its target, so an unresolved

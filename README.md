@@ -135,6 +135,7 @@ See `docs/per-client-policy.md`.
 | `gw job` | `list` / `add <name> <schedule>` / `rm` / `enable` / `disable` |
 | `gw web-passwd` | set the dashboard password |
 | `gw bench` | find the throughput bottleneck: link, CPU, or tunnel |
+| `gw history [h] [ip]` | what happened while you weren't looking — for faults that come and go |
 | `gw update` | `all` \| `xray` \| `adguard` \| `tailscale` \| `geo` \| `packages` \| `--check` |
 | `gw panic` | drop to plain NAT so the LAN works while you debug |
 | `gw logs` | follow every relevant journal at once |
