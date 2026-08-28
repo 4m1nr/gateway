@@ -616,11 +616,13 @@ cmd_diag() {
   # enough on its own to produce "Subnet routing is enabled, but IP forwarding
   # is disabled", on a box that forwards IPv4 perfectly well. The generic
   # wording sends people to check ip_forward, which is not the one that is off.
-  local fwd6
+  local fwd6 fwd_file iface
   fwd6=$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || echo "n/a")
   printf '  ipv6 forwarding (all)=%s' "$fwd6"
-  for i in $(ls /proc/sys/net/ipv4/conf 2>/dev/null | grep -vE '^(all|default)$'); do
-    printf ' %s:v4=%s' "$i" "$(cat "/proc/sys/net/ipv4/conf/$i/forwarding" 2>/dev/null || echo '?')"
+  for fwd_file in /proc/sys/net/ipv4/conf/*/forwarding; do
+    iface=$(basename "$(dirname "$fwd_file")")
+    case "$iface" in all|default) continue ;; esac
+    printf ' %s:v4=%s' "$iface" "$(cat "$fwd_file" 2>/dev/null || echo '?')"
   done
   printf '\n'
   if [ "$fwd6" = "0" ]; then
