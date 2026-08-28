@@ -1,0 +1,62 @@
+{
+  "http": {
+    "address": "0.0.0.0:3000"
+  },
+  "dns": {
+    "bind_hosts": [
+      "0.0.0.0"
+    ],
+    "port": 53,
+    "upstream_dns": [
+      "[/ir/]178.22.122.100",
+      "[/ir/]185.51.200.2",
+      "https://1.1.1.1/dns-query",
+      "https://8.8.8.8/dns-query"
+    ],
+    "bootstrap_dns": [
+      "1.1.1.1",
+      "8.8.8.8"
+    ],
+    "fallback_dns": [],
+    "upstream_mode": "load_balance",
+    "ratelimit": 0,
+    "enable_dnssec": true,
+    "cache_size": 8388608,
+    "cache_ttl_min": 60,
+    "aaaa_disabled": false,
+    "local_ptr_upstreams": [
+      "178.22.122.100",
+      "185.51.200.2"
+    ]
+  },
+  "querylog": {
+    "enabled": true,
+    "interval": "72h",
+    "size_memory": 1000
+  },
+  "statistics": {
+    "enabled": true,
+    "interval": "168h"
+  },
+  "filters": [
+    {
+      "enabled": true,
+      "url": "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt",
+      "name": "filter_1.txt",
+      "id": 1000
+    },
+    {
+      "enabled": true,
+      "url": "https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt",
+      "name": "filter_2.txt",
+      "id": 1001
+    }
+  ],
+  "clients": {
+    "persistent": []
+  },
+  "filtering": {
+    "protection_enabled": true,
+    "filtering_enabled": true
+  }
+}

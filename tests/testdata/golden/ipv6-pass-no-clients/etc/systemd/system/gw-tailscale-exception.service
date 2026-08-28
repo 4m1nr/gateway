@@ -1,0 +1,16 @@
+[Unit]
+Description=Exempt tailscaled from the Xray tunnel
+# The cgroup must exist before the rule can be added, and the rule goes stale
+# if tailscaled is restarted — the drop-in on tailscaled.service re-applies it.
+After=tailscaled.service gw-network.service
+Requires=gw-network.service
+BindsTo=tailscaled.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/gateway/ts-bypass.sh exceptions on
+ExecStop=/usr/local/lib/gateway/ts-bypass.sh exceptions off
+
+[Install]
+WantedBy=tailscaled.service

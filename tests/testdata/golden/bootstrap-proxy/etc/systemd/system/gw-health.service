@@ -1,0 +1,7 @@
+[Unit]
+Description=Gateway tunnel health watchdog
+After=xray.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/gateway/health.sh
