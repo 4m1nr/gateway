@@ -2,7 +2,7 @@ bootstrap-proxy	644	adguard-overrides.json
 bootstrap-proxy	644	etc/cron.d/gw-jobs
 bootstrap-proxy	644	etc/gateway/web.json
 bootstrap-proxy	644	etc/nftables.d/gateway.nft
-bootstrap-proxy	644	etc/sudoers.d/gw-web
+bootstrap-proxy	440	etc/sudoers.d/gw-web
 bootstrap-proxy	644	etc/sysctl.d/99-gateway.conf
 bootstrap-proxy	644	etc/systemd/network/10-gateway-wan.network
 bootstrap-proxy	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -34,7 +34,7 @@ custom-routes	644	adguard-overrides.json
 custom-routes	644	etc/cron.d/gw-jobs
 custom-routes	644	etc/gateway/web.json
 custom-routes	644	etc/nftables.d/gateway.nft
-custom-routes	644	etc/sudoers.d/gw-web
+custom-routes	440	etc/sudoers.d/gw-web
 custom-routes	644	etc/sysctl.d/99-gateway.conf
 custom-routes	644	etc/systemd/network/10-gateway-wan.network
 custom-routes	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -66,7 +66,7 @@ default	644	adguard-overrides.json
 default	644	etc/cron.d/gw-jobs
 default	644	etc/gateway/web.json
 default	644	etc/nftables.d/gateway.nft
-default	644	etc/sudoers.d/gw-web
+default	440	etc/sudoers.d/gw-web
 default	644	etc/sysctl.d/99-gateway.conf
 default	644	etc/systemd/network/10-gateway-wan.network
 default	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -98,7 +98,7 @@ default-policy-block	644	adguard-overrides.json
 default-policy-block	644	etc/cron.d/gw-jobs
 default-policy-block	644	etc/gateway/web.json
 default-policy-block	644	etc/nftables.d/gateway.nft
-default-policy-block	644	etc/sudoers.d/gw-web
+default-policy-block	440	etc/sudoers.d/gw-web
 default-policy-block	644	etc/sysctl.d/99-gateway.conf
 default-policy-block	644	etc/systemd/network/10-gateway-wan.network
 default-policy-block	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -130,7 +130,7 @@ default-policy-direct	644	adguard-overrides.json
 default-policy-direct	644	etc/cron.d/gw-jobs
 default-policy-direct	644	etc/gateway/web.json
 default-policy-direct	644	etc/nftables.d/gateway.nft
-default-policy-direct	644	etc/sudoers.d/gw-web
+default-policy-direct	440	etc/sudoers.d/gw-web
 default-policy-direct	644	etc/sysctl.d/99-gateway.conf
 default-policy-direct	644	etc/systemd/network/10-gateway-wan.network
 default-policy-direct	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -162,7 +162,7 @@ exit-node-direct	644	adguard-overrides.json
 exit-node-direct	644	etc/cron.d/gw-jobs
 exit-node-direct	644	etc/gateway/web.json
 exit-node-direct	644	etc/nftables.d/gateway.nft
-exit-node-direct	644	etc/sudoers.d/gw-web
+exit-node-direct	440	etc/sudoers.d/gw-web
 exit-node-direct	644	etc/sysctl.d/99-gateway.conf
 exit-node-direct	644	etc/systemd/network/10-gateway-wan.network
 exit-node-direct	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -194,7 +194,7 @@ exit-node-profile	644	adguard-overrides.json
 exit-node-profile	644	etc/cron.d/gw-jobs
 exit-node-profile	644	etc/gateway/web.json
 exit-node-profile	644	etc/nftables.d/gateway.nft
-exit-node-profile	644	etc/sudoers.d/gw-web
+exit-node-profile	440	etc/sudoers.d/gw-web
 exit-node-profile	644	etc/sysctl.d/99-gateway.conf
 exit-node-profile	644	etc/systemd/network/10-gateway-wan.network
 exit-node-profile	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -226,7 +226,7 @@ ipv6-pass-no-clients	644	adguard-overrides.json
 ipv6-pass-no-clients	644	etc/cron.d/gw-jobs
 ipv6-pass-no-clients	644	etc/gateway/web.json
 ipv6-pass-no-clients	644	etc/nftables.d/gateway.nft
-ipv6-pass-no-clients	644	etc/sudoers.d/gw-web
+ipv6-pass-no-clients	440	etc/sudoers.d/gw-web
 ipv6-pass-no-clients	644	etc/sysctl.d/99-gateway.conf
 ipv6-pass-no-clients	644	etc/systemd/network/10-gateway-wan.network
 ipv6-pass-no-clients	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -260,7 +260,7 @@ jobs	644	adguard-overrides.json
 jobs	644	etc/cron.d/gw-jobs
 jobs	644	etc/gateway/web.json
 jobs	644	etc/nftables.d/gateway.nft
-jobs	644	etc/sudoers.d/gw-web
+jobs	440	etc/sudoers.d/gw-web
 jobs	644	etc/sysctl.d/99-gateway.conf
 jobs	644	etc/systemd/network/10-gateway-wan.network
 jobs	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -295,7 +295,7 @@ no-tailscale	644	adguard-overrides.json
 no-tailscale	644	etc/cron.d/gw-jobs
 no-tailscale	644	etc/gateway/web.json
 no-tailscale	644	etc/nftables.d/gateway.nft
-no-tailscale	644	etc/sudoers.d/gw-web
+no-tailscale	440	etc/sudoers.d/gw-web
 no-tailscale	644	etc/sysctl.d/99-gateway.conf
 no-tailscale	644	etc/systemd/network/10-gateway-wan.network
 no-tailscale	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -352,7 +352,7 @@ profiles	644	adguard-overrides.json
 profiles	644	etc/cron.d/gw-jobs
 profiles	644	etc/gateway/web.json
 profiles	644	etc/nftables.d/gateway.nft
-profiles	644	etc/sudoers.d/gw-web
+profiles	440	etc/sudoers.d/gw-web
 profiles	644	etc/sysctl.d/99-gateway.conf
 profiles	644	etc/systemd/network/10-gateway-wan.network
 profiles	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -384,7 +384,7 @@ reality-fallback	644	adguard-overrides.json
 reality-fallback	644	etc/cron.d/gw-jobs
 reality-fallback	644	etc/gateway/web.json
 reality-fallback	644	etc/nftables.d/gateway.nft
-reality-fallback	644	etc/sudoers.d/gw-web
+reality-fallback	440	etc/sudoers.d/gw-web
 reality-fallback	644	etc/sysctl.d/99-gateway.conf
 reality-fallback	644	etc/systemd/network/10-gateway-wan.network
 reality-fallback	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
@@ -416,7 +416,7 @@ trojan-upstream	644	adguard-overrides.json
 trojan-upstream	644	etc/cron.d/gw-jobs
 trojan-upstream	644	etc/gateway/web.json
 trojan-upstream	644	etc/nftables.d/gateway.nft
-trojan-upstream	644	etc/sudoers.d/gw-web
+trojan-upstream	440	etc/sudoers.d/gw-web
 trojan-upstream	644	etc/sysctl.d/99-gateway.conf
 trojan-upstream	644	etc/systemd/network/10-gateway-wan.network
 trojan-upstream	644	etc/systemd/system/AdGuardHome.service.d/gw.conf

@@ -15,9 +15,13 @@ import (
 	"github.com/am1nr/gateway/internal/jsonx"
 )
 
-// executable are the files installed with the execute bit. Job scripts are
-// handled separately: they run as root and may hold credentials, so they are
-// 0700 rather than 0755.
+// executable are the files installed with the execute bit.
+//
+// Job scripts are handled separately: they run as root and may hold
+// credentials, so they are 0700 rather than 0755. net.sh is deliberately absent
+// — it is only ever sourced, never executed, and bin/gw's
+// `usr/local/lib/gateway/*.sh` glob used to make it 0755 by accident, the same
+// over-broad-glob mistake that once made job scripts world-readable.
 var executable = map[string]bool{
 	"usr/local/lib/gateway/ip-rules.sh":       true,
 	"usr/local/lib/gateway/health.sh":         true,
@@ -29,6 +33,12 @@ var executable = map[string]bool{
 }
 
 const jobScriptPrefix = "usr/local/lib/gateway/jobs/"
+
+// sudoersPath must be installed 0440. sudo refuses to read a sudoers file it
+// considers too permissive, and 0644 additionally exposes the grant to every
+// user on the box. The Python renderer staged this 0644 and bin/gw re-set it to
+// 0440 at install time; defining it once here is what stops the two drifting.
+const sudoersPath = "etc/sudoers.d/gw-web"
 
 // File is one rendered file destined for the staging tree.
 type File struct {
@@ -226,6 +236,8 @@ func modeFor(rel string) os.FileMode {
 	case strings.HasPrefix(rel, jobScriptPrefix):
 		// Job scripts run as root and may hold credentials.
 		return 0o700
+	case rel == sudoersPath:
+		return 0o440
 	case executable[rel]:
 		return 0o755
 	default:
@@ -261,3 +273,14 @@ func Write(c *config.Config, out string, opt Options) ([]File, error) {
 	}
 	return files, nil
 }
+
+// NotInstalled are rendered entries that `gw apply` consumes directly rather
+// than copying into the filesystem. They live in the staging tree because that
+// is where apply looks for them, but they have no place on the box.
+var NotInstalled = map[string]bool{
+	"adguard-overrides.json": true,
+	"tailscale-args":         true,
+}
+
+// Installed reports whether this file is copied onto the target filesystem.
+func (f File) Installed() bool { return !NotInstalled[f.Path] }
