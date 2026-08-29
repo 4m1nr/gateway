@@ -68,8 +68,14 @@ func TestFixturesAreGenerated(t *testing.T) {
 	}
 	var orphans []string
 	for _, e := range entries {
+		// Dot-prefixed files are scratch: other test packages write candidates
+		// here so an outbound's relative `file` path still resolves, and Go
+		// runs packages in parallel. Go's own tooling ignores them too.
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
 		name := strings.TrimSuffix(e.Name(), ".toml")
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".toml") && !generated[name] {
+		if strings.HasSuffix(e.Name(), ".toml") && !generated[name] {
 			orphans = append(orphans, e.Name())
 		}
 	}

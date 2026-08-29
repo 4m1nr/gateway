@@ -2,12 +2,15 @@ import { NavLink, Outlet } from "react-router-dom";
 import {
   Activity,
   CalendarClock,
+  Globe,
   LayoutDashboard,
   LogOut,
   MonitorSmartphone,
   Moon,
   Route,
+  Settings2,
   Sun,
+  Terminal,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Badge, Button } from "./ui";
@@ -17,9 +20,12 @@ import { useEffect, useState } from "react";
 const nav = [
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
   { to: "/clients", label: "Clients", icon: MonitorSmartphone },
-  { to: "/xray", label: "Xray", icon: Route },
+  { to: "/routing", label: "Routing", icon: Route },
+  { to: "/dns", label: "DNS", icon: Globe },
+  { to: "/xray", label: "Xray", icon: Activity },
   { to: "/jobs", label: "Jobs", icon: CalendarClock },
-  { to: "/system", label: "System", icon: Activity },
+  { to: "/console", label: "Console", icon: Terminal },
+  { to: "/settings", label: "Settings", icon: Settings2 },
 ];
 
 /** Tunnel state is in the sidebar on every page: it is the one fact that

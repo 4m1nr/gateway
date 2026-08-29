@@ -63,6 +63,8 @@ export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: JSON.stringify(body ?? {}) }),
+  put: <T>(path: string, body: unknown) =>
+    request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE", body: "{}" }),
 };
 
@@ -141,6 +143,78 @@ export interface Outbound {
   address: string;
   resolved_ip: string;
   json: string;
+}
+
+/** The whole config, as decoded from gateway.toml. Sections the UI models are
+ *  typed; the rest is carried through untouched so saving one cannot drop
+ *  another. */
+export type ConfigDoc = Record<string, unknown>;
+
+export interface ConfigResponse {
+  config: ConfigDoc;
+  /** Empty when the config loads. Otherwise what is wrong with it — shown
+   *  alongside the editor, because that is the only way to fix it from here. */
+  config_error: string;
+  toml: string;
+}
+
+export interface ProfileRoute {
+  via: string;
+  domains?: string[];
+  ips?: string[];
+}
+
+export interface Profile {
+  name: string;
+  base?: string;
+  route?: ProfileRoute[];
+}
+
+export interface Upstream {
+  name: string;
+  file?: string;
+  json?: string;
+  server_ip?: string;
+}
+
+export interface CustomRoute {
+  position?: string;
+  outboundTag?: string;
+  domain?: string[];
+  ip?: string[];
+  port?: string;
+  network?: string;
+  source?: string[];
+  json?: string;
+  [key: string]: unknown;
+}
+
+export interface DnsSettings {
+  adguard_port?: number;
+  adguard_ui_port?: number;
+  upstreams_proxied?: string[];
+  upstreams_direct?: string[];
+  direct_suffixes?: string[];
+  bootstrap?: string[];
+  intercept?: boolean;
+  blocklists?: string[];
+  querylog_days?: number;
+  statslog_days?: number;
+}
+
+export interface GwCommand {
+  name: string;
+  summary: string;
+  args?: string[];
+  disruptive: boolean;
+  argument?: string;
+}
+
+export interface CommandResult {
+  command: string;
+  args: string[];
+  status: "ok" | "failed" | "timeout";
+  output: string;
 }
 
 export interface Session {

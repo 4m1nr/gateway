@@ -48,6 +48,11 @@ type Request struct {
 	Tag         string `json:"tag"`
 	JSON        string `json:"json"`
 	Link        string `json:"link"`
+	// Section is the top-level gateway.toml table a config write replaces.
+	Section string `json:"section"`
+	// Command and Args name a gw subcommand to run from the dashboard.
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
 }
 
 // Response is the result. ok is the only field the caller must consult.
@@ -119,6 +124,16 @@ func (h Handler) Handle(req Request) Response {
 		return h.diff()
 	case "apply":
 		return h.applyNow()
+	case "config_read":
+		return h.configRead()
+	case "config_write":
+		return h.configWrite(req)
+	case "config_backup":
+		return h.configBackup()
+	case "commands":
+		return h.commandList()
+	case "run_command":
+		return h.runCommand(req)
 	}
 	return fail("unknown action: %q", req.Action)
 }

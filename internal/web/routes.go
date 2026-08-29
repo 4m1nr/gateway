@@ -1,6 +1,7 @@
 package web
 
 import (
+	"io"
 	"net/http"
 
 	"github.com/am1nr/gateway/internal/web/action"
@@ -23,6 +24,9 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /api/outbounds", s.authed(s.proxyGet("outbounds")))
 	mux.HandleFunc("GET /api/config/generated", s.authed(s.proxyGet("generated_config")))
 	mux.HandleFunc("GET /api/diff", s.authed(s.proxyGet("diff")))
+	mux.HandleFunc("GET /api/config", s.authed(s.proxyGet("config_read")))
+	mux.HandleFunc("GET /api/config/backup", s.authed(s.proxyGet("config_backup")))
+	mux.HandleFunc("GET /api/commands", s.authed(s.proxyGet("commands")))
 
 	// Mutating. Each is a distinct action name, so the helper's whitelist is
 	// the real authorisation surface rather than a URL pattern.
@@ -34,6 +38,8 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/outbounds/import", s.authed(s.handleImportLink))
 	mux.HandleFunc("POST /api/units/{unit}/restart", s.authed(s.handleRestartUnit))
 	mux.HandleFunc("POST /api/apply", s.authed(s.handleApply))
+	mux.HandleFunc("PUT /api/config/{section}", s.authed(s.handleConfigWrite))
+	mux.HandleFunc("POST /api/commands/{name}", s.authed(s.handleRunCommand))
 
 	// Everything else is the dashboard itself. Registered last and at the
 	// root, so it never shadows an API route.
@@ -263,6 +269,43 @@ func (s *Server) handleRestartUnit(w http.ResponseWriter, r *http.Request, _ *we
 func (s *Server) handleApply(w http.ResponseWriter, r *http.Request, _ *webauth.Session) {
 	s.Log.Info("apply", "peer", peerAddr(r))
 	s.call(w, action.Request{Action: "apply"})
+}
+
+// ---------------------------------------------------------------- config --
+
+func (s *Server) handleConfigWrite(w http.ResponseWriter, r *http.Request, _ *webauth.Session) {
+	section := r.PathValue("section")
+	// The body is the section's new value, as JSON, forwarded verbatim. The
+	// helper decides whether the section may be written and whether the result
+	// still loads — this process is not the one that gets to judge that.
+	body, err := io.ReadAll(io.LimitReader(r.Body, 512*1024))
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, "could not read the request")
+		return
+	}
+	s.Log.Info("config write", "peer", peerAddr(r), "section", section)
+	s.call(w, action.Request{Action: "config_write", Section: section, JSON: string(body)})
+}
+
+// ------------------------------------------------------------- commands --
+
+type commandRequest struct {
+	Args []string `json:"args"`
+}
+
+func (s *Server) handleRunCommand(w http.ResponseWriter, r *http.Request, _ *webauth.Session) {
+	var req commandRequest
+	// An empty body is a command with no arguments, which most of them are.
+	if r.ContentLength > 0 {
+		if err := decode(r, &req); err != nil {
+			s.fail(w, http.StatusBadRequest, "could not read the request")
+			return
+		}
+	}
+	name := r.PathValue("name")
+	// Logged loudly: this runs a privileged command on the gateway.
+	s.Log.Info("run command", "peer", peerAddr(r), "command", name, "args", req.Args)
+	s.call(w, action.Request{Action: "run_command", Command: name, Args: req.Args})
 }
 
 func firstLine(s string) string {
