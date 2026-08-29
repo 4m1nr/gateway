@@ -58,3 +58,13 @@ func sortedShorthands() []string {
 	sort.Strings(out)
 	return out
 }
+
+// ValidateCron checks a cron schedule the way the config loader does.
+//
+// Exported because the dashboard's privileged helper re-validates a schedule as
+// root before writing it: a malformed line in /etc/cron.d is not rejected by
+// cron, it is silently ignored, so the job would simply never run and nothing
+// would say why.
+func ValidateCron(expr string) error {
+	return validateCron(strings.TrimSpace(expr), "schedule")
+}
