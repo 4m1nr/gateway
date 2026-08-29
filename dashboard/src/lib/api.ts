@@ -146,5 +146,8 @@ export interface Outbound {
 export interface Session {
   authenticated: boolean;
   password_set: boolean;
+  /** Set when the privileged helper could not be reached at all. Distinct from
+   *  password_set: one is fixed with `gw web-passwd`, the other is not. */
+  helper_error: string;
   csrf: string | null;
 }

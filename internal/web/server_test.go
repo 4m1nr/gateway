@@ -352,3 +352,67 @@ func TestUnitRestartGoesThroughTheHelperByName(t *testing.T) {
 		t.Errorf("the helper was asked %+v", last)
 	}
 }
+
+// A privileged helper that is not answering must not be reported as "no
+// password is set". They have different fixes, and conflating them sends the
+// owner to run `gw web-passwd` over and over while the page keeps saying the
+// same thing — which is exactly what happened.
+func TestBrokenHelperIsNotReportedAsAMissingPassword(t *testing.T) {
+	helper := &fakeHelper{password: "hunter2hunter2"}
+	helper.respond = func(action.Request) action.Response {
+		return action.Response{OK: false, Error: "sudo: a password is required"}
+	}
+	s := newTestServer(t, helper)
+
+	w := request(t, s, "GET", "/api/session", "192.168.1.50", "", nil, nil)
+	var body struct {
+		PasswordSet bool   `json:"password_set"`
+		HelperError string `json:"helper_error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.HelperError == "" {
+		t.Error("a refusing helper produced no helper_error, so the page cannot tell the difference")
+	}
+	if !strings.Contains(body.HelperError, "sudo") {
+		t.Errorf("helper_error does not carry what actually went wrong: %q", body.HelperError)
+	}
+}
+
+// A working helper reporting no password must still say so plainly, with no
+// spurious error.
+func TestWorkingHelperWithNoPasswordReportsExactlyThat(t *testing.T) {
+	s := newTestServer(t, &fakeHelper{password: ""})
+	w := request(t, s, "GET", "/api/session", "192.168.1.50", "", nil, nil)
+	var body struct {
+		PasswordSet bool   `json:"password_set"`
+		HelperError string `json:"helper_error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.PasswordSet {
+		t.Error("password_set is true on a box with no password")
+	}
+	if body.HelperError != "" {
+		t.Errorf("a healthy helper produced an error: %q", body.HelperError)
+	}
+}
+
+// And a working helper with a password set reports that, so the login form is
+// actually usable.
+func TestWorkingHelperWithAPasswordReportsItSet(t *testing.T) {
+	s := newTestServer(t, &fakeHelper{password: "hunter2hunter2"})
+	w := request(t, s, "GET", "/api/session", "192.168.1.50", "", nil, nil)
+	var body struct {
+		PasswordSet bool   `json:"password_set"`
+		HelperError string `json:"helper_error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.PasswordSet || body.HelperError != "" {
+		t.Errorf("a box with a password reports %+v", body)
+	}
+}

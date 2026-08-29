@@ -70,10 +70,29 @@ func ensurePath() {
 	_ = os.Setenv("PATH", joined)
 }
 
+// actionHelperName is the filename `gw apply` installs the privileged helper
+// under. The sudoers grant names that exact path with NO arguments — that is
+// the security property, and it is why the helper has to recognise itself by
+// the name it was invoked as rather than by a subcommand it can never be given.
+const actionHelperName = "gw-action"
+
 func main() {
 	ensurePath()
 
 	args := os.Args[1:]
+
+	// Invoked as gw-action, this process IS the privileged helper, whatever
+	// arguments it did or did not receive. Without this it printed usage and
+	// exited 0 without reading the request on stdin, so every dashboard action
+	// failed and the login page reported it as "no password set".
+	if filepath.Base(os.Args[0]) == actionHelperName {
+		if err := cmdWebAction(args); err != nil {
+			cli.Errorf("%v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(args) == 0 {
 		usage()
 		os.Exit(0)

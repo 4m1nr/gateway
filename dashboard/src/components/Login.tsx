@@ -3,15 +3,21 @@ import { api, ApiError, setCsrf } from "@/lib/api";
 import { Alert, Button, Input } from "./ui";
 
 /**
- * The login screen. It reports the difference between "no password is set" and
- * "wrong password", because the first is fixed on the box with
- * `sudo gw web-passwd` and the second is not.
+ * The login screen.
+ *
+ * It distinguishes three states, because they have three different fixes: no
+ * password set (run `gw web-passwd`), the wrong password (try again), and the
+ * privileged helper not answering (nothing typed here will help). Collapsing
+ * the third into the first is how someone ends up running web-passwd over and
+ * over while the page keeps saying no password is set.
  */
 export function Login({
   passwordSet,
+  helperError,
   onSignedIn,
 }: {
   passwordSet: boolean;
+  helperError: string;
   onSignedIn: () => void;
 }) {
   const [password, setPassword] = useState("");
@@ -41,18 +47,36 @@ export function Login({
           <p className="text-3xl">🛡️</p>
           <h1 className="mt-2 text-lg font-semibold tracking-tight">Gateway</h1>
           <p className="mt-1 text-xs text-muted">
-            {passwordSet
-              ? "Enter the dashboard password."
-              : "No password is set yet."}
+            {helperError
+              ? "Cannot reach the privileged helper."
+              : passwordSet
+                ? "Enter the dashboard password."
+                : "No password is set yet."}
           </p>
         </div>
 
-        {!passwordSet && (
+        {helperError ? (
+          <Alert tone="bad" title="The privileged helper is not answering">
+            <p>
+              The dashboard cannot ask the box anything, so it cannot tell
+              whether a password is set. Running{" "}
+              <code className="font-mono">gw web-passwd</code> will not fix this.
+            </p>
+            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap font-mono text-[11px] opacity-80">
+              {helperError}
+            </pre>
+            <p className="mt-2">
+              On the box: <code className="font-mono">sudo gw apply</code> to
+              reinstall the helper and its sudo grant, then{" "}
+              <code className="font-mono">journalctl -u gw-web -n 50</code>.
+            </p>
+          </Alert>
+        ) : !passwordSet ? (
           <Alert tone="warn" title="No dashboard password">
             Run <code className="font-mono">sudo gw web-passwd</code> on the box.
             Until then every login is refused.
           </Alert>
-        )}
+        ) : null}
 
         <Input
           type="password"
@@ -60,7 +84,7 @@ export function Login({
           placeholder="Password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          disabled={!passwordSet || busy}
+          disabled={!passwordSet || !!helperError || busy}
           autoFocus
           required
         />
@@ -71,7 +95,7 @@ export function Login({
           type="submit"
           variant="primary"
           className="w-full py-2"
-          disabled={!passwordSet || busy || !password}
+          disabled={!passwordSet || !!helperError || busy || !password}
         >
           {busy ? "Signing in…" : "Sign in"}
         </Button>

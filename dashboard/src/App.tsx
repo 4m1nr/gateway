@@ -94,7 +94,13 @@ export function App() {
   }
 
   if (!session.authenticated) {
-    return <Login passwordSet={session.password_set} onSignedIn={() => void loadSession()} />;
+    return (
+      <Login
+        passwordSet={session.password_set}
+        helperError={session.helper_error ?? ""}
+        onSignedIn={() => void loadSession()}
+      />
+    );
   }
 
   const signOut = () => {

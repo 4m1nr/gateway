@@ -59,14 +59,29 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 
 	// Whether a password exists is asked across the privilege boundary: this
 	// process cannot read the hash file, by design.
+	//
+	// A failure here is reported as a failure. Folding it into
+	// password_set = false told the owner to run `gw web-passwd`, which cannot
+	// fix a helper that is not answering — and they ran it, repeatedly, while
+	// the page went on saying no password was set.
 	configured := false
-	if resp, err := s.Privileged.Call(action.Request{Action: "auth_status"}); err == nil && resp.OK {
+	helperError := ""
+	resp, err := s.Privileged.Call(action.Request{Action: "auth_status"})
+	switch {
+	case err != nil:
+		helperError = err.Error()
+		s.Log.Error("the privileged helper is not answering", "err", err)
+	case !resp.OK:
+		helperError = resp.Error
+		s.Log.Error("the privileged helper refused auth_status", "err", resp.Error)
+	default:
 		configured, _ = resp.Data["password_set"].(bool)
 	}
 
 	body := map[string]any{
 		"authenticated": sess != nil,
 		"password_set":  configured,
+		"helper_error":  helperError,
 		"csrf":          nil,
 	}
 	if sess != nil {
