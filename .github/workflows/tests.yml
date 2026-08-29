@@ -14,10 +14,90 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          # Matches what Debian 13 ships, which is what the box builds with.
+          # Testing on a newer toolchain than the target would let a build
+          # failure reach the gateway rather than CI.
+          go-version: "1.24"
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update -qq
+          # nftables: every generated ruleset is fed to a real `nft -c`
+          # sudo:     provides visudo, which validates the sudoers fragment
+          sudo apt-get install -y --no-install-recommends nftables sudo
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd internal *.go)
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: vet
+        run: go vet -mod=vendor ./...
+
+      - name: test
+        run: go test -mod=vendor ./...
+
+      - name: race
+        run: go test -mod=vendor -race ./...
+
+      - name: Build with the network off
+        # Dependencies are vendored so a gateway with no working internet can
+        # still build the binary that fixes it. This proves that stays true.
+        run: CGO_ENABLED=0 GOFLAGS=-mod=vendor GOPROXY=off go build -o /dev/null ./cmd/gw
+
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install
+        run: npm ci
+        working-directory: dashboard
+
+      - name: Typecheck
+        run: npm run lint
+        working-directory: dashboard
+
+      - name: Build
+        run: npm run build
+        working-directory: dashboard
+
+      - name: The committed build must match its source
+        # dist/ is committed so the box builds with Go alone and never needs
+        # Node. That only holds if the committed output is actually what the
+        # source produces — otherwise the binary ships a dashboard nobody wrote.
+        run: |
+          if ! git diff --quiet -- dashboard/dist; then
+            echo "dashboard/dist does not match a fresh build of dashboard/src."
+            echo "Run: make dashboard && git add dashboard/dist"
+            git diff --stat -- dashboard/dist
+            exit 1
+          fi
+          echo "dist/ matches its source"
+
   suite:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
 
       - name: Install test dependencies
         run: |
@@ -25,11 +105,11 @@ jobs:
           # nftables: the suite feeds every generated ruleset to a real `nft -c`
           # sudo:     provides visudo, which validates the dashboard's sudoers file
           # zip:      used by the sandboxed updater tests
-          sudo apt-get install -y --no-install-recommends nftables sudo zip
+          sudo apt-get install -y --no-install-recommends nftables sudo jq
 
       - name: Show versions
         run: |
-          python3 --version
+          go version
           nft --version
           bash --version | head -1
 
@@ -79,4 +159,4 @@ jobs:
           # is someone's only route to the internet — SC2221 already caught a
           # case glob that installed root-owned job scripts world-readable.
           shellcheck --severity=warning --shell=bash \
-            bin/gw lib/common.sh scripts/*.sh templates/lib/*.sh tests/run.sh
+            lib/common.sh scripts/*.sh templates/lib/*.sh tests/run.sh

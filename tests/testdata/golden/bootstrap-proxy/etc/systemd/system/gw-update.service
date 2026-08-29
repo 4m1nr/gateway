@@ -1,0 +1,13 @@
+[Unit]
+Description=Scheduled gateway component update (services)
+# Updates are downloaded through the tunnel, so there is no point running
+# before it exists.
+After=xray.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Long enough for an apt upgrade on a slow thin client over a slow tunnel,
+# bounded so a hung download cannot leave the unit running until next week.
+TimeoutStartSec=45min
+ExecStart=@REPO@/bin/gw update services

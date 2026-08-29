@@ -24,12 +24,10 @@ configs on the box — you edit that file and run `gw apply`.
 
 ```bash
 git clone <this repo> /opt/gateway && cd /opt/gateway
-sudo ln -s /opt/gateway/bin/gw /usr/local/bin/gw
+sudo scripts/00-bootstrap.sh # installs Go, builds bin/gw, base system, static IP
 
-gw init                      # interview; paste your vless:// XHTTP link
+gw init                      # interview; paste your vless:// share link
 gw client add 192.168.1.50 laptop proxy
-
-sudo scripts/00-bootstrap.sh # base system, static IP, clock, logging
 sudo scripts/10-xray.sh      # tunnel, verified over SOCKS before anything is intercepted
 sudo scripts/20-adguard.sh   # LAN DNS
 sudo scripts/30-tailscale.sh # subnet router + exit node
@@ -38,8 +36,10 @@ sudo scripts/50-hardening.sh # ssh, unattended upgrades, timers
 sudo gw check                # prove the whole path end to end
 ```
 
-Run the scripts in order. Each one leaves the box in a working state and tells
-you what to verify before moving on — `10-xray.sh` confirms the tunnel over
+`00-bootstrap.sh` installs the Go toolchain, builds `bin/gw` and links it to
+`/usr/local/bin/gw`; everything after that is a `gw` command. Run the scripts
+in order. Each one leaves the box in a working state and tells you what to
+verify before moving on — `10-xray.sh` confirms the tunnel over
 SOCKS *before* any traffic is intercepted, so a bad XHTTP parameter can't take
 the LAN offline.
 
@@ -131,6 +131,7 @@ See `docs/per-client-policy.md`.
 | `gw status` | services, boot state, tunnel state, killswitch drop count |
 | `gw check` | end-to-end verification incl. leak tests |
 | `gw check --killswitch` | also prove traffic dies rather than leaking |
+| `gw web` | run the dashboard (started by gw-web.service) |
 | `gw client` | `list` / `add <ip> <name> <policy>` / `rm <ip>` |
 | `gw job` | `list` / `add <name> <schedule>` / `rm` / `enable` / `disable` |
 | `gw web-passwd` | set the dashboard password |
@@ -146,8 +147,17 @@ gateway is refused rather than half-applied.
 
 ## Web dashboard
 
-`https://<box>:8088` — tunnel state, services, per-route traffic, an on-demand
-exit-IP check, and client management with an Apply button.
+`https://<box>:8088` — tunnel state, services, per-route traffic, client
+management, scheduled jobs, and the Xray configuration itself.
+
+The **Xray** page puts the raw config in front of you. Outbounds are shown
+exactly as the gateway loaded them, including the two fields it injects — `tag`,
+which routing rules reference, and `streamSettings.sockopt.mark`, the loop guard
+— because those are what make a pasted outbound safe to use here and they are
+invisible in the file you pasted. Beside them is the complete generated
+`config.json`, and a share-link importer for `vless://`, `vmess://`, `trojan://`
+and `ss://` that writes nothing: the JSON appears for review before it becomes
+the tunnel everything routes through.
 
 ```bash
 sudo scripts/40-web.sh    # service user, self-signed cert, firewall rule
@@ -166,20 +176,27 @@ It can rewrite the firewall, so it is fenced three independent ways:
    a stolen cookie is not portable.
 3. **Privilege separation** — the web process runs as `gwweb` and can do
    nothing on its own. Every privileged action is a JSON request piped to a
-   single sudo entry point, `web-action.py`, which re-validates every field as
-   root. The sudo grant is that one command with no arguments and no wildcards,
-   so a compromised web process cannot ask for anything the helper does not
-   already implement. The password hash is `0600 root:root` and the web process
-   never reads it — logins are verified across the same boundary.
+   single sudo entry point, `/usr/local/lib/gateway/gw-action`, which
+   re-validates every field as root. The sudo grant is that one command with no
+   arguments and no wildcards, and the request travels on stdin — so no value
+   derived from an HTTP request ever reaches a command line, and a compromised
+   web process cannot ask for anything the helper does not already implement.
+   The password hash is `0600 root:root` and the web process never reads it —
+   logins are verified across the same boundary.
+
+   The one thing that is *not* a sudo grant is reading the journal: the
+   dashboard streams logs, and a request/response helper cannot carry a stream,
+   so `gwweb` is a member of `systemd-journal`. That is read-only access to logs
+   the dashboard already reports on, with no path to escalation.
 
 TLS is on by default with a self-signed certificate; your browser warns once.
 That stops the password crossing the LAN in clear text, but a LAN attacker
 could still substitute their own certificate and you would click through — if
 that matters, reach the dashboard over Tailscale instead.
 
-`http.server` is not a hardened internet-facing server, and this is not exposed
-to the internet. Keep it that way: don't port-forward it, and don't widen
-`allow_cidrs` to `0.0.0.0/0` (the loader refuses that anyway).
+This is not exposed to the internet, and it is not built to be. Keep it that
+way: don't port-forward it, and don't widen `allow_cidrs` to `0.0.0.0/0` (the
+loader refuses that anyway).
 
 ## Updating
 
@@ -495,15 +512,40 @@ gateway.toml          the source of truth (gitignored)
 gateway.example.toml  documented template
 outbounds/*.json      Xray outbound objects, used verbatim (gitignored)
 versions.toml         pinned Xray / AdGuard versions + checksums
-bin/gw                the CLI
-lib/                  config model, renderers, dashboard (Python 3, stdlib only)
-templates/            nftables, systemd units, helper scripts, web assets
+bin/gw                the binary (built; gitignored)
+cmd/gw/               the CLI
+internal/config/      gateway.toml model and validation
+internal/render/      every generated file
+internal/apply/       diff, validate, install, reload
+internal/web/         the dashboard's server and privilege boundary
+dashboard/            the dashboard's source (React); dist/ is committed
+internal/check/       `gw check` — end-to-end verification
+internal/diag/        status, diag, trace, history, bench
+templates/            nftables, systemd units, runtime helper scripts
 scripts/              ordered, idempotent install steps
+vendor/               vendored Go dependencies, so the box builds offline
 build/                rendered output, mirrors the target filesystem
-tests/run.sh          offline suite — real `nft -c`, outbound and routing invariants
+tests/                fixtures, frozen golden output, and run.sh for the shell
 docs/                 recovery, troubleshooting, per-client policy
 ```
 
-`tests/run.sh` runs anywhere, without root or a network, and feeds every
-generated ruleset to a real `nft -c` inside a user namespace. Run it after any
-change to `lib/` or `templates/`.
+The gateway is a single static Go binary. Dependencies are vendored, so a box
+with no working internet — the normal state of a gateway being repaired — can
+still build the thing that fixes it:
+
+```bash
+make build     # CGO_ENABLED=0, no network needed
+make check     # vet, gofmt, the full suite
+make offline   # proves the build needs no network
+```
+
+The dashboard is built with Node and its output is committed, so the box never
+needs a JavaScript toolchain; CI rebuilds it and fails if the committed output
+does not match its source.
+
+`go test ./...` runs anywhere, without root or a network. It compares every
+generated file against output frozen from before the Go migration, feeds every
+ruleset to a real `nft -c` inside a user namespace, and asserts the firewall
+and routing invariants one at a time. `tests/run.sh` covers what is still
+shell — the install scripts and the runtime helpers — and runs the Go suite
+first.

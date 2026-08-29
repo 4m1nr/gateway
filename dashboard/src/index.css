@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark-first, one cool accent — the PasarGuard idiom. The gateway gets looked
+   at in two situations: idly, and at 1am when the LAN is down. Both want low
+   contrast for the chrome and high contrast for the one thing that is wrong. */
+:root {
+  --bg: 250 250 250;
+  --surface: 255 255 255;
+  --raised: 244 244 245;
+  --border: 228 228 231;
+  --fg: 24 24 27;
+  --muted: 113 113 122;
+  --accent: 79 70 229;
+  --ok: 22 163 74;
+  --warn: 202 138 4;
+  --bad: 220 38 38;
+}
+
+.dark {
+  --bg: 9 9 11;
+  --surface: 24 24 27;
+  --raised: 39 39 42;
+  --border: 39 39 42;
+  --fg: 250 250 250;
+  --muted: 161 161 170;
+  --accent: 129 140 248;
+  --ok: 74 222 128;
+  --warn: 250 204 21;
+  --bad: 248 113 113;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-fg antialiased;
+}
+
+/* Focus rings stay visible: this is a control panel, and the keyboard path has
+   to work when the mouse is elsewhere. */
+*:focus-visible {
+  @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-bg;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-border;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* The JSON editor fills its container and scrolls internally, so a long config
+   never stretches the page. */
+.cm-editor {
+  height: 100%;
+}
+.cm-editor.cm-focused {
+  outline: none !important;
+}
+.cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  font-size: 12.5px !important;
+  line-height: 1.6 !important;
+}

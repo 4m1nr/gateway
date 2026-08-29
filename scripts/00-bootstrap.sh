@@ -20,13 +20,29 @@ export DEBIAN_FRONTEND=noninteractive
 # bootstrap.socks_proxy in gateway.toml (or pass `gw --proxy ...`).
 apt_proxy_on
 apt-get update -qq
+# golang-go builds `gw`, which is now the whole gateway: no Python, no YAML
+# module, nothing to pip-install on a box with no working internet.
 apt-get install -y --no-install-recommends \
   nftables iproute2 curl ca-certificates unzip jq \
-  chrony python3 python3-yaml openssl sudo cron \
+  chrony golang-go openssl sudo cron util-linux \
   ethtool tcpdump dnsutils mtr-tiny vnstat \
   zram-tools unattended-upgrades
 
 apt_proxy_off
+
+# Build the binary. CGO off so it is genuinely static: nothing about `gw` should
+# depend on a shared library that an unattended upgrade might move.
+info "building gw"
+if ! (cd "$REPO" && CGO_ENABLED=0 go build -trimpath -o bin/gw ./cmd/gw); then
+  die "could not build gw. Go 1.24 or newer is required; this box has:
+    $(go version 2>&1 || echo 'no go on PATH')"
+fi
+info "built $REPO/bin/gw"
+
+# Keep /usr/local/bin/gw pointing INTO the repo. A copy here survives every
+# git pull, so the box keeps running old code while the checkout says
+# otherwise, and every fix you pull appears to have done nothing.
+ln -sfn "$REPO/bin/gw" /usr/local/bin/gw
 
 # Installing the nftables package can enable nftables.service, which loads
 # /etc/nftables.conf starting with `flush ruleset`. That would erase the

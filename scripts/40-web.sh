@@ -25,6 +25,14 @@ if ! id gwweb >/dev/null 2>&1; then
   useradd --system --no-create-home --shell /usr/sbin/nologin gwweb
 fi
 
+# The dashboard streams the journal. A request/response sudo helper cannot carry
+# a stream, so this is group membership instead — read-only access to logs the
+# dashboard already reports on, and no path to escalation.
+if getent group systemd-journal >/dev/null 2>&1; then
+  info "adding gwweb to systemd-journal (read-only log access for the dashboard)"
+  usermod -aG systemd-journal gwweb
+fi
+
 "$REPO/bin/gw" render >/dev/null
 PORT=$(sed -n 's/.*"port": *\([0-9]*\).*/\1/p' "$REPO/build/etc/gateway/web.json")
 TLS=$(grep -q '"tls": *true' "$REPO/build/etc/gateway/web.json" && echo yes || echo no)
@@ -67,8 +75,7 @@ cat <<NEXT
 
 Dashboard: $SCHEME://$BOX:$PORT
 
-Reachable only from: $(sed -n 's/.*"allow_cidrs".*//p' /etc/gateway/web.json >/dev/null; python3 -c "
-import json;print(', '.join(json.load(open('/etc/gateway/web.json'))['allow_cidrs']))")
+Reachable only from: $(sed -n 's/.*"allow_cidrs": *\[\(.*\)\].*/\1/p' /etc/gateway/web.json | tr -d '"')
 
 Next: sudo scripts/50-hardening.sh
 NEXT

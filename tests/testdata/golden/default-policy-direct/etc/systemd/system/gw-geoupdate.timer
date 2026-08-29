@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Xray geodata refresh (no-op unless upstream published)
+
+PartOf=gateway.target
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=gateway.target
