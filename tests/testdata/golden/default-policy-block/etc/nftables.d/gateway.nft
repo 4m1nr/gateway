@@ -205,7 +205,8 @@ table inet gateway {
         ip saddr $LAN meta l4proto { tcp, udp } th dport 53 \
             counter accept comment "input-dns"
         ip saddr $LAN tcp dport 22 accept
-        ip saddr $LAN tcp dport 3000 accept
+        # AdGuard admin interface, restricted to dns.ui_allow_cidrs
+        ip saddr { 192.168.1.0/24 } tcp dport 3000 accept
         # web dashboard, restricted to web.allow_cidrs
         ip saddr { 192.168.1.0/24, 100.64.0.0/10 } tcp dport 8088 accept
 

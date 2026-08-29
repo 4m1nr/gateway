@@ -8,6 +8,7 @@ import {
   MonitorSmartphone,
   Moon,
   Route,
+  Save,
   Settings2,
   Sun,
   Terminal,
@@ -25,6 +26,7 @@ const nav = [
   { to: "/xray", label: "Xray", icon: Activity },
   { to: "/jobs", label: "Jobs", icon: CalendarClock },
   { to: "/console", label: "Console", icon: Terminal },
+  { to: "/backup", label: "Backup", icon: Save },
   { to: "/settings", label: "Settings", icon: Settings2 },
 ];
 

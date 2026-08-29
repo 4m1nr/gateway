@@ -16,7 +16,7 @@ router    = "192.168.1.1"
 static_ip = "192.168.1.2"
 
 [xray.outbound]
-file = "main.json"
+file = "outbounds/main.json"
 
 [[profile]]
 name = "work"
@@ -35,7 +35,12 @@ const outboundJSON = `{
 func newHandler(t *testing.T) Handler {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "main.json"), []byte(outboundJSON), 0o600); err != nil {
+	// outbounds/ rather than the repo root, mirroring a real checkout: the
+	// backup follows what the config references, and the layout is part of it.
+	if err := os.MkdirAll(filepath.Join(dir, "outbounds"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "outbounds", "main.json"), []byte(outboundJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := filepath.Join(dir, "gateway.toml")
@@ -182,7 +187,7 @@ func TestConfigIsCheckedAfterAnEdit(t *testing.T) {
 		t.Fatalf("setup failed: %s", resp.Error)
 	}
 	// Break the outbound the config depends on, then edit again.
-	os.WriteFile(filepath.Join(h.Repo, "main.json"), []byte("{not json"), 0o600)
+	os.WriteFile(filepath.Join(h.Repo, "outbounds", "main.json"), []byte("{not json"), 0o600)
 	resp := h.Handle(Request{Action: "client_add", IP: "192.168.1.51", Name: "tv", Policy: "proxy"})
 	if resp.OK {
 		t.Error("an edit that leaves the config unloadable was reported as success")

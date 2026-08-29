@@ -114,7 +114,7 @@ jobs:
           sudo apt-get update -qq
           # nftables: the suite feeds every generated ruleset to a real `nft -c`
           # sudo:     provides visudo, which validates the dashboard's sudoers file
-          # zip:      used by the sandboxed updater tests
+          # jq:       validates the committed example outbounds
           sudo apt-get install -y --no-install-recommends nftables sudo jq
 
       - name: Show versions
@@ -144,17 +144,11 @@ jobs:
             ./tests/run.sh
           fi
 
-      - name: Fixtures are up to date with the example config
-        run: |
-          # Fixtures are generated from gateway.example.toml. A stale fixture
-          # silently stops testing what it was written for, so regenerating must
-          # be a no-op on a clean tree.
-          python3 tests/make_fixtures.py
-          if ! git diff --quiet -- tests/fixtures; then
-            echo "::error::tests/fixtures is stale — run 'python3 tests/make_fixtures.py' and commit"
-            git --no-pager diff --stat -- tests/fixtures
-            exit 1
-          fi
+      # Fixture freshness is checked by TestFixturesAreGenerated in the `go`
+      # job: it derives every fixture from gateway.example.toml and fails if a
+      # committed one has drifted. A stale fixture silently stops testing what
+      # it was written for, and the golden files are built from these, so it
+      # would quietly invalidate the renderer's acceptance test too.
 
   shellcheck:
     runs-on: ubuntu-latest

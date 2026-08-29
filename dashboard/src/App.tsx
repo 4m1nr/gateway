@@ -12,6 +12,7 @@ import { Routing } from "@/pages/Routing";
 import { Dns } from "@/pages/Dns";
 import { Settings } from "@/pages/Settings";
 import { Console } from "@/pages/Console";
+import { Backup } from "@/pages/Backup";
 import { usePoll } from "@/lib/usePoll";
 
 // The JSON editor is the largest dependency in the app and is only needed on
@@ -130,6 +131,7 @@ export function App() {
           <Route path="dns" element={<Dns onPending={() => setPending(true)} />} />
           <Route path="jobs" element={<Jobs onPending={() => setPending(true)} />} />
           <Route path="console" element={<Console />} />
+          <Route path="backup" element={<Backup onPending={() => setPending(true)} />} />
           <Route path="settings" element={<Settings onPending={() => setPending(true)} />} />
           <Route path="system" element={<System />} />
         </Route>

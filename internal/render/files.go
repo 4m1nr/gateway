@@ -94,12 +94,21 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 	if c.SSHAllowLAN {
 		sshRule = "        ip saddr $LAN tcp dport 22 accept\n"
 	}
-	uiRule := fmt.Sprintf("        ip saddr $LAN tcp dport %d accept\n", c.UIPort)
+	// AdGuard's admin interface. An empty list means the port is never opened,
+	// which is a thing to want: AdGuard has its own password, but it is one
+	// more login on one more port.
+	uiRule := fmt.Sprintf("        # AdGuard admin interface (port %d) is not "+
+		"opened: dns.ui_enabled = false\n", c.UIPort)
+	if len(c.UIAllow) > 0 {
+		uiRule = "        # AdGuard admin interface, restricted to dns.ui_allow_cidrs\n" +
+			fmt.Sprintf("        ip saddr { %s } tcp dport %d accept\n",
+				strings.Join(c.UIAllow, ", "), c.UIPort)
+	}
 
 	// First of the dashboard's three gates. The app re-checks the peer itself;
 	// this is what stops a packet from an unlisted source arriving at all.
 	webRule := ""
-	if c.WebEnabled {
+	if c.WebEnabled && len(c.WebAllow) > 0 {
 		webRule = "        # web dashboard, restricted to web.allow_cidrs\n" +
 			fmt.Sprintf("        ip saddr { %s } tcp dport %d accept\n",
 				strings.Join(c.WebAllow, ", "), c.WebPort)

@@ -1,6 +1,8 @@
 package render
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -238,4 +240,144 @@ func TestUncountedDropInventoryIsUnchanged(t *testing.T) {
 			t.Errorf("uncounted drops in %s changed: got %v, want exactly [%q]", chainName, lines, want)
 		}
 	}
+}
+
+// Narrowing who may reach a service has to reach the firewall, or the setting
+// is a comment. These are the first gate for both the dashboard and AdGuard's
+// admin interface.
+func TestServicePortsFollowTheirAllowLists(t *testing.T) {
+	cases := []struct {
+		name   string
+		body   string
+		open   map[int][]string // port -> networks that must appear
+		closed []int
+	}{
+		{
+			name: "defaults",
+			body: "",
+			open: map[int][]string{
+				8088: {"192.168.1.0/24", "100.64.0.0/10"},
+				3000: {"192.168.1.0/24"},
+			},
+		},
+		{
+			name: "dashboard over tailscale only",
+			body: "[web]\nallow_cidrs = [\"100.64.0.0/10\"]",
+			open: map[int][]string{8088: {"100.64.0.0/10"}},
+		},
+		{
+			name: "adguard over tailscale as well",
+			body: "[dns]\nui_allow_cidrs = [\"192.168.1.0/24\", \"100.64.0.0/10\"]",
+			open: map[int][]string{3000: {"192.168.1.0/24", "100.64.0.0/10"}},
+		},
+		{
+			name:   "adguard interface closed entirely",
+			body:   "[dns]\nui_enabled = false",
+			closed: []int{3000},
+		},
+		{
+			name:   "dashboard disabled",
+			body:   "[web]\nenabled = false",
+			closed: []int{8088},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := loadWithSection(t, tc.body)
+			ruleset, err := NFT(cfg, fixedTime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := chain(t, ruleset, "input")
+
+			for port, networks := range tc.open {
+				line := findPortRule(input, port)
+				if line == "" {
+					t.Errorf("port %d is not opened at all", port)
+					continue
+				}
+				for _, network := range networks {
+					if !strings.Contains(line, network) {
+						t.Errorf("port %d does not accept from %s:\n  %s", port, network, line)
+					}
+				}
+				// Never from everywhere.
+				if strings.Contains(line, "0.0.0.0/0") {
+					t.Errorf("port %d is open to everything:\n  %s", port, line)
+				}
+			}
+			for _, port := range tc.closed {
+				if line := findPortRule(input, port); line != "" {
+					t.Errorf("port %d should not be opened, but is:\n  %s", port, line)
+				}
+			}
+		})
+	}
+}
+
+// findPortRule returns the accept rule for a port, or "".
+func findPortRule(chain string, port int) string {
+	want := "dport " + itoa(port) + " accept"
+	for _, line := range strings.Split(chain, "\n") {
+		if strings.Contains(line, want) && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
+}
+
+// loadWithSection appends a section to the default fixture and loads it.
+func loadWithSection(t *testing.T, body string) *config.Config {
+	t.Helper()
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "tests/fixtures/default.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The appended table wins for the keys it names; TOML rejects a duplicate
+	// table, so the original is removed first where they collide.
+	text := string(raw)
+	for _, table := range []string{"[web]", "[dns]"} {
+		if !strings.Contains(body, table) {
+			continue
+		}
+		text = removeTable(text, table)
+	}
+
+	path := filepath.Join(root, "tests", "fixtures",
+		".tmp-"+strings.ReplaceAll(t.Name(), "/", "-")+".toml")
+	if err := os.WriteFile(path, []byte(text+"\n"+body+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(path) })
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	return cfg
+}
+
+// removeTable drops a top-level table and its keys, up to the next table.
+func removeTable(text, header string) string {
+	lines := strings.Split(text, "\n")
+	var out []string
+	skipping := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == header {
+			skipping = true
+			continue
+		}
+		if skipping {
+			if strings.HasPrefix(trimmed, "[") {
+				skipping = false
+			} else {
+				continue
+			}
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }

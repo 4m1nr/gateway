@@ -4,9 +4,13 @@ import { readConfig, section } from "@/lib/config";
 import { Alert, Empty, Input, Panel, Select } from "@/components/ui";
 import { Field, ListField, Toggle } from "@/components/ListField";
 import { SaveBar } from "@/components/SaveBar";
+import { AccessPanel } from "@/components/AccessPanel";
+import { api, type Status } from "@/lib/api";
+import { usePoll } from "@/lib/usePoll";
 
 /** Everything that was previously SSH-only. */
 export function Settings({ onPending }: { onPending: () => void }) {
+  const { data: status } = usePoll<Status>(() => api.get<Status>("/api/status"), 30000);
   const [doc, setDoc] = useState<ConfigDoc | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [configError, setConfigError] = useState("");
@@ -46,12 +50,52 @@ export function Settings({ onPending }: { onPending: () => void }) {
         </Alert>
       )}
 
+      <DashboardAccess doc={doc} lanCidr={status?.lan ?? ""} onSaved={saved} />
       <GeoSplit doc={doc} onSaved={saved} />
       <Tailscale doc={doc} onSaved={saved} />
       <Health doc={doc} onSaved={saved} />
       <SystemPanel doc={doc} onSaved={saved} />
       <Performance doc={doc} onSaved={saved} />
     </div>
+  );
+}
+
+// ------------------------------------------------------- dashboard access --
+
+interface WebSettings {
+  enabled?: boolean;
+  allow_cidrs?: string[];
+  [key: string]: unknown;
+}
+
+function DashboardAccess({
+  doc,
+  lanCidr,
+  onSaved,
+}: {
+  doc: ConfigDoc;
+  lanCidr: string;
+  onSaved: () => void;
+}) {
+  const web = section<WebSettings>(doc, "web", {});
+  return (
+    <AccessPanel
+      title="Who may reach this dashboard"
+      description="The first of its four gates. nftables refuses the port from anywhere else, and the server re-checks the address itself — a header claiming otherwise is ignored, because nothing proxies this service."
+      section="web"
+      field="allow_cidrs"
+      service="this dashboard"
+      lanCidr={lanCidr}
+      value={web}
+      onSaved={onSaved}
+      disabledNotice={
+        <>
+          You would lose access to this page on the next apply. Reach it again by
+          forwarding the port over SSH, or set <span className="font-mono">enabled</span>{" "}
+          to false and use the CLI.
+        </>
+      }
+    />
   );
 }
 

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 
@@ -40,6 +41,9 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/apply", s.authed(s.handleApply))
 	mux.HandleFunc("PUT /api/config/{section}", s.authed(s.handleConfigWrite))
 	mux.HandleFunc("POST /api/commands/{name}", s.authed(s.handleRunCommand))
+	mux.HandleFunc("POST /api/backup", s.authed(s.handleBackupCreate))
+	mux.HandleFunc("POST /api/backup/inspect", s.authed(s.handleBackupInspect))
+	mux.HandleFunc("POST /api/backup/restore", s.authed(s.handleBackupRestore))
 
 	// Everything else is the dashboard itself. Registered last and at the
 	// root, so it never shadows an API route.
@@ -306,6 +310,65 @@ func (s *Server) handleRunCommand(w http.ResponseWriter, r *http.Request, _ *web
 	// Logged loudly: this runs a privileged command on the gateway.
 	s.Log.Info("run command", "peer", peerAddr(r), "command", name, "args", req.Args)
 	s.call(w, action.Request{Action: "run_command", Command: name, Args: req.Args})
+}
+
+// ---------------------------------------------------------------- backup --
+
+type backupRequest struct {
+	// Secrets asks for the outbound credentials to be included.
+	Secrets bool `json:"secrets"`
+}
+
+func (s *Server) handleBackupCreate(w http.ResponseWriter, r *http.Request, _ *webauth.Session) {
+	var req backupRequest
+	if r.ContentLength > 0 {
+		if err := decode(r, &req); err != nil {
+			s.fail(w, http.StatusBadRequest, "could not read the request")
+			return
+		}
+	}
+	// Logged with whether credentials were included: a backup containing them
+	// is a file that can stand up the tunnel somewhere else.
+	s.Log.Info("backup created", "peer", peerAddr(r), "secrets", req.Secrets)
+	s.call(w, action.Request{Action: "backup_create", Enabled: req.Secrets})
+}
+
+type restoreRequest struct {
+	Archive string `json:"archive"`
+}
+
+func (s *Server) handleBackupInspect(w http.ResponseWriter, r *http.Request, _ *webauth.Session) {
+	req, ok := s.readArchive(w, r)
+	if !ok {
+		return
+	}
+	s.call(w, action.Request{Action: "backup_inspect", JSON: req.Archive})
+}
+
+func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request, _ *webauth.Session) {
+	req, ok := s.readArchive(w, r)
+	if !ok {
+		return
+	}
+	s.Log.Info("backup restored", "peer", peerAddr(r))
+	s.call(w, action.Request{Action: "backup_restore", JSON: req.Archive})
+}
+
+// readArchive reads an uploaded backup, bounded well above any real config and
+// well below anything that would matter to a thin client's memory.
+func (s *Server) readArchive(w http.ResponseWriter, r *http.Request) (restoreRequest, bool) {
+	var req restoreRequest
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 8<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		s.fail(w, http.StatusBadRequest, "could not read the uploaded file")
+		return req, false
+	}
+	if req.Archive == "" {
+		s.fail(w, http.StatusBadRequest, "no backup file was uploaded")
+		return req, false
+	}
+	return req, true
 }
 
 func firstLine(s string) string {

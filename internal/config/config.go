@@ -386,6 +386,23 @@ func (c *Config) parseDNS(raw map[string]any) error {
 	if c.StatslogDays, err = integer(dns, "statslog_days", 7); err != nil {
 		return err
 	}
+	// AdGuard's own admin interface. Its port was previously opened to the LAN
+	// by a hardcoded rule, with no way to narrow, widen or close it.
+	//
+	// ui_enabled mirrors web.enabled: it is how you say "not reachable over the
+	// network at all". ui_allow_cidrs narrows it, the same way and with the same
+	// empty-means-default rule as the dashboard's.
+	if c.UIEnabled, err = boolean(dns, "ui_enabled", true); err != nil {
+		return err
+	}
+	c.UIAllow, err = allowList(dns, "ui_allow_cidrs", "dns.ui_allow_cidrs",
+		"AdGuard's admin interface", []string{c.LANCidr})
+	if err != nil {
+		return err
+	}
+	if !c.UIEnabled {
+		c.UIAllow = nil
+	}
 
 	for _, u := range c.UpProxied {
 		if !strings.HasPrefix(u, "https://") {
@@ -776,23 +793,16 @@ func (c *Config) parseWeb(raw map[string]any) error {
 
 	// Default to the LAN plus the tailnet: the dashboard can rewrite the
 	// firewall, so it is never reachable from anywhere by accident.
-	allow, err := stringList(w, "allow_cidrs", nil)
+	//
+	// An explicitly empty list is honoured as "from nowhere" rather than
+	// silently replaced by the default. "Reachable from no network" is a
+	// legitimate thing to want — the dashboard is then only reachable by
+	// forwarding a port over SSH — and a setting that quietly does the opposite
+	// of what it says is worse than one that refuses.
+	c.WebAllow, err = allowList(w, "allow_cidrs", "web.allow_cidrs",
+		"the dashboard", []string{c.LANCidr, TailnetV4})
 	if err != nil {
 		return err
-	}
-	if len(allow) == 0 {
-		allow = []string{c.LANCidr, TailnetV4}
-	}
-	for _, cidr := range allow {
-		p, err := parsePrefix(cidr, "web.allow_cidrs")
-		if err != nil {
-			return err
-		}
-		if p.Bits() == 0 {
-			return errf("web.allow_cidrs contains 0.0.0.0/0, which would expose the " +
-				"dashboard to everything the box can reach. List real networks.")
-		}
-		c.WebAllow = append(c.WebAllow, p.String())
 	}
 
 	if c.SessionHours, err = integer(w, "session_hours", 12); err != nil {
@@ -922,6 +932,39 @@ func (c *Config) parseSystem(raw map[string]any) error {
 		return err
 	}
 	return nil
+}
+
+// allowList reads the networks that may reach a service.
+//
+// An empty list means the default, which is what gateway.example.toml has
+// documented and shipped since the beginning: `allow_cidrs = []` in an existing
+// config means "the LAN plus the tailnet", and reading it as "nowhere" would
+// lock every existing install out of its own dashboard on the next apply.
+//
+// Narrowing is done by listing only what should reach it — a tailnet-only
+// dashboard is `allow_cidrs = ["100.64.0.0/10"]`. Closing it entirely is what
+// the service's own `enabled` flag is for.
+func allowList(table map[string]any, key, where, what string, fallback []string) ([]string, error) {
+	entries, err := stringList(table, key, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return append([]string(nil), fallback...), nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, cidr := range entries {
+		prefix, err := parsePrefix(cidr, where)
+		if err != nil {
+			return nil, err
+		}
+		if prefix.Bits() == 0 {
+			return nil, errf("%s contains 0.0.0.0/0, which would expose %s to "+
+				"everything the box can reach. List real networks.", where, what)
+		}
+		out = append(out, prefix.String())
+	}
+	return out, nil
 }
 
 // --------------------------------------------------------------- helpers --

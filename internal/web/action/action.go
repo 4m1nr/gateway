@@ -134,6 +134,12 @@ func (h Handler) Handle(req Request) Response {
 		return h.commandList()
 	case "run_command":
 		return h.runCommand(req)
+	case "backup_create":
+		return h.backupCreate(req)
+	case "backup_inspect":
+		return h.backupInspect(req)
+	case "backup_restore":
+		return h.backupRestore(req)
 	}
 	return fail("unknown action: %q", req.Action)
 }

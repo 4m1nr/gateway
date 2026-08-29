@@ -200,6 +200,10 @@ export interface DnsSettings {
   blocklists?: string[];
   querylog_days?: number;
   statslog_days?: number;
+  /** Whether the firewall opens AdGuard's admin port at all. */
+  ui_enabled?: boolean;
+  /** Who may reach it. Empty means the LAN. */
+  ui_allow_cidrs?: string[];
 }
 
 export interface GwCommand {
@@ -215,6 +219,31 @@ export interface CommandResult {
   args: string[];
   status: "ok" | "failed" | "timeout";
   output: string;
+}
+
+export interface BackupManifest {
+  version: number;
+  created: string;
+  host: string;
+  files: string[];
+  secrets: boolean;
+}
+
+export interface BackupResult {
+  filename: string;
+  archive: string;
+  manifest: BackupManifest;
+  bytes: number;
+  /** Outbounds the config points at from outside the repo. They cannot be
+   *  restored into place, so they are named rather than silently dropped. */
+  skipped?: string[];
+}
+
+export interface BackupPreview {
+  manifest: BackupManifest;
+  files: string[];
+  toml: string;
+  config_error?: string;
 }
 
 export interface Session {

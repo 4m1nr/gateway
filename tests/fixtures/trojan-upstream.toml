@@ -240,6 +240,15 @@ blocklists = [
   "https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt",
 ]
 # Query log retention. Thin-client flash is small — keep this short.
+# AdGuard's own admin interface, on adguard_ui_port.
+#
+# It has its own password, but it is one more login on one more port, and it
+# reaches the resolver the whole LAN depends on. ui_enabled = false stops the
+# firewall opening the port at all; ui_allow_cidrs narrows who may reach it,
+# the same way the dashboard's allow_cidrs does. Empty = lan_cidr.
+ui_enabled     = true
+ui_allow_cidrs = []
+
 querylog_days = 3
 statslog_days = 7
 
@@ -332,6 +341,11 @@ cert = "/etc/gateway/web.crt"
 key  = "/etc/gateway/web.key"
 
 # Who may reach the dashboard at all. Empty = lan_cidr + the tailnet.
+#
+# List only what should reach it to narrow that: ["100.64.0.0/10"] makes the
+# dashboard reachable over Tailscale and not from the LAN, which is a good
+# setting for a household where the LAN has guests on it. To close it off
+# entirely, set enabled = false above.
 allow_cidrs = []
 
 session_hours     = 12

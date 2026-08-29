@@ -5,6 +5,7 @@ import { readConfig, section } from "@/lib/config";
 import { Alert, Badge, Empty, Input, Panel, Row } from "@/components/ui";
 import { Field, ListField, Toggle } from "@/components/ListField";
 import { SaveBar } from "@/components/SaveBar";
+import { AccessPanel } from "@/components/AccessPanel";
 import { usePoll } from "@/lib/usePoll";
 
 /**
@@ -146,6 +147,31 @@ export function Dns({ onPending }: { onPending: () => void }) {
           lie. Failing closed on DNS is the same choice the firewall makes.
         </p>
       </Panel>
+
+      <AccessPanel
+        title="Who may reach AdGuard's interface"
+        description="AdGuard has its own password, but it is one more login on one more port — and it reaches the resolver the whole LAN depends on."
+        section="dns"
+        field="ui_allow_cidrs"
+        service="AdGuard's admin interface"
+        lanCidr={status?.lan ?? ""}
+        value={dns as unknown as Record<string, unknown>}
+        onSaved={() => { onPending(); void load(); }}
+        extraFields={
+          <Toggle
+            label="Open the port at all"
+            hint="Off means the firewall never opens it. AdGuard still runs and still serves DNS; only its web interface becomes unreachable, which is a reasonable default for a box nobody administers day to day."
+            checked={dns.ui_enabled ?? true}
+            onChange={(ui_enabled) => patch({ ui_enabled })}
+          />
+        }
+        disabledNotice={
+          <>
+            AdGuard keeps serving DNS — only its admin interface becomes
+            unreachable. You can still get to it by forwarding the port over SSH.
+          </>
+        }
+      />
 
       <Panel title="Interception and retention">
         <div className="grid gap-5 lg:grid-cols-2">
