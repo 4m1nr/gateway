@@ -8,8 +8,11 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: build
-build: ## Build the gw binary (static, dependencies vendored)
-	CGO_ENABLED=0 $(GO) build -mod=vendor -trimpath -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/gw
+build: ## Build the gw binary (static, vendored, no toolchain download)
+	# GOTOOLCHAIN=local: fail rather than fetch a newer Go. The box has one
+	# toolchain, from the distro, and no way to get another when the tunnel it
+	# is meant to build is down.
+	GOTOOLCHAIN=local CGO_ENABLED=0 $(GO) build -mod=vendor -trimpath -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/gw
 
 .PHONY: test
 test: ## Run the Go suite
@@ -42,9 +45,9 @@ golden: ## Regenerate the renderer's golden files — only ever deliberately
 	@echo "goldens regenerated — read the diff before committing it"
 
 .PHONY: offline
-offline: ## Prove the build needs no network
-	CGO_ENABLED=0 GOFLAGS=-mod=vendor GOPROXY=off $(GO) build -o /dev/null ./cmd/gw
-	@echo "builds with GOPROXY=off"
+offline: ## Prove the build needs no network and no newer toolchain
+	CGO_ENABLED=0 GOFLAGS=-mod=vendor GOPROXY=off GOTOOLCHAIN=local $(GO) build -o /dev/null ./cmd/gw
+	@echo "builds with GOPROXY=off and GOTOOLCHAIN=local"
 
 .PHONY: help
 help: ## List targets

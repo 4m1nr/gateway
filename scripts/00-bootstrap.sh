@@ -32,10 +32,17 @@ apt_proxy_off
 
 # Build the binary. CGO off so it is genuinely static: nothing about `gw` should
 # depend on a shared library that an unattended upgrade might move.
+# GOTOOLCHAIN=local: fail rather than silently fetch a newer Go. This box has
+# one toolchain, from the distro, and downloading another needs the very tunnel
+# this binary exists to bring up.
 info "building gw"
-if ! (cd "$REPO" && CGO_ENABLED=0 go build -trimpath -o bin/gw ./cmd/gw); then
-  die "could not build gw. Go 1.24 or newer is required; this box has:
-    $(go version 2>&1 || echo 'no go on PATH')"
+if ! (cd "$REPO" && GOTOOLCHAIN=local CGO_ENABLED=0 go build -mod=vendor -trimpath -o bin/gw ./cmd/gw); then
+  die "could not build gw with $(go version 2>&1 || echo 'no go on PATH').
+
+    If the error mentions a module requiring a newer Go, the dependencies have
+    outgrown this box's toolchain — that is a repo bug, not a local one.
+    TestNoDependencyOutgrowsTheToolchain catches it; run 'go test .' in a
+    checkout to confirm."
 fi
 info "built $REPO/bin/gw"
 
