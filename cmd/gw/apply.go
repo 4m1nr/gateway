@@ -169,6 +169,10 @@ func postInstall(f commonFlags, cfg *config.Config) error {
 	// the generated ruleset knows about.
 	clearPanicTable()
 
+	// It may also have pointed the resolver at the router. Undone only once
+	// AdGuard actually answers.
+	restoreResolverAfterApply()
+
 	if err := sd.Start("gateway.target"); err != nil {
 		cli.Warn("%v", err)
 	}

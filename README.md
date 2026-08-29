@@ -131,6 +131,7 @@ See `docs/per-client-policy.md`.
 | `gw status` | services, boot state, tunnel state, killswitch drop count |
 | `gw check` | end-to-end verification incl. leak tests |
 | `gw check --killswitch` | also prove traffic dies rather than leaking |
+| `gw web` | run the dashboard (started by gw-web.service) |
 | `gw client` | `list` / `add <ip> <name> <policy>` / `rm <ip>` |
 | `gw job` | `list` / `add <name> <schedule>` / `rm` / `enable` / `disable` |
 | `gw web-passwd` | set the dashboard password |
@@ -511,19 +512,20 @@ gateway.toml          the source of truth (gitignored)
 gateway.example.toml  documented template
 outbounds/*.json      Xray outbound objects, used verbatim (gitignored)
 versions.toml         pinned Xray / AdGuard versions + checksums
-bin/gw                the CLI entry point
-bin/gw-bin            the Go binary (built; gitignored)
+bin/gw                the binary (built; gitignored)
 cmd/gw/               the CLI
 internal/config/      gateway.toml model and validation
 internal/render/      every generated file
 internal/apply/       diff, validate, install, reload
 internal/web/         the dashboard's server and privilege boundary
 dashboard/            the dashboard's source (React); dist/ is committed
-templates/            nftables, systemd units, helper scripts
+internal/check/       `gw check` — end-to-end verification
+internal/diag/        status, diag, trace, history, bench
+templates/            nftables, systemd units, runtime helper scripts
 scripts/              ordered, idempotent install steps
 vendor/               vendored Go dependencies, so the box builds offline
 build/                rendered output, mirrors the target filesystem
-tests/                Go suite plus run.sh — real `nft -c`, routing invariants
+tests/                fixtures, frozen golden output, and run.sh for the shell
 docs/                 recovery, troubleshooting, per-client policy
 ```
 

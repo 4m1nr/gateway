@@ -15,6 +15,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/am1nr/gateway/internal/cli"
 )
@@ -24,7 +26,43 @@ import (
 // git pull and makes each fix you pull look like it did nothing.
 var version = "dev"
 
+// ensurePath puts the sbin directories on PATH.
+//
+// nft, sysctl, ip, visudo and useradd all live in /usr/sbin, which is NOT in
+// every root PATH — a plain `su`, or a root shell whose profile never added it,
+// has only /usr/bin. Calling them by bare name then fails in ways that look
+// like something else entirely: `gw status` reported "firewall not loaded"
+// purely because it could not find nft, while `sudo gw apply` worked, because
+// sudo's secure_path does include /usr/sbin. The disagreement looked like the
+// firewall was vanishing.
+func ensurePath() {
+	want := []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
+	have := map[string]bool{}
+	current := os.Getenv("PATH")
+	for _, dir := range filepath.SplitList(current) {
+		have[dir] = true
+	}
+	var missing []string
+	for _, dir := range want {
+		if !have[dir] {
+			missing = append(missing, dir)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	// Prepended, so the expected tool wins over a same-named one further along
+	// a PATH this process did not choose.
+	joined := strings.Join(missing, string(filepath.ListSeparator))
+	if current != "" {
+		joined += string(filepath.ListSeparator) + current
+	}
+	_ = os.Setenv("PATH", joined)
+}
+
 func main() {
+	ensurePath()
+
 	args := os.Args[1:]
 	if len(args) == 0 {
 		usage()
@@ -60,6 +98,22 @@ func main() {
 		err = cmdWebAction(rest)
 	case "web-passwd":
 		err = cmdWebPasswd(rest)
+	case "diag":
+		err = cmdDiag(rest)
+	case "trace":
+		err = cmdTrace(rest)
+	case "history":
+		err = cmdHistory(rest)
+	case "bench":
+		err = cmdBench(rest)
+	case "update":
+		err = cmdUpdate(rest)
+	case "panic":
+		err = cmdPanic(rest)
+	case "init":
+		err = cmdInit(rest)
+	case "check":
+		err = cmdCheck(rest)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -87,6 +141,14 @@ func usage() {
   gw disable       stop the stack and remove it from boot
   gw restart       restart the whole stack
   gw logs          follow every relevant journal at once
+  gw init          interview -> gateway.toml (parses a share link)
+  gw check         end-to-end verification, including leak tests
+  gw diag [ip]     why a client's traffic is or is not being intercepted
+  gw trace <ip>    follow one client's packets rule by rule, live
+  gw history [h]   what happened while you were not looking
+  gw bench         find the throughput bottleneck: link, CPU, or tunnel
+  gw update        all | services | xray | adguard | tailscale | geo | packages | --check
+  gw panic         drop to plain NAT so the LAN works while you debug
   gw web-passwd    set the dashboard password
   gw version       which build is running
 

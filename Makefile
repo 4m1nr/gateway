@@ -3,7 +3,7 @@
 # repaired — can still build the binary that fixes it.
 
 GO      ?= go
-BINARY  ?= bin/gw-bin
+BINARY  ?= bin/gw
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 

@@ -382,6 +382,15 @@ func run(timeout time.Duration, name string, args ...string) (string, error) {
 	return string(out), err
 }
 
+// runCombined is run, but the output is returned even when the command failed.
+//
+// For the routing probes that failing IS the result: `ip route get` refusing a
+// martian source is the answer being looked for, not an error to discard.
+func runCombined(timeout time.Duration, name string, args ...string) (string, error) {
+	out, err := run(timeout, name, args...)
+	return out, err
+}
+
 // readEnv parses the rendered env file, stripping one layer of shell quoting.
 func readEnv(path string) map[string]string {
 	out := map[string]string{}

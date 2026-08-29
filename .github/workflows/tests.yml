@@ -95,17 +95,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
       - name: Install test dependencies
         run: |
           sudo apt-get update -qq
           # nftables: the suite feeds every generated ruleset to a real `nft -c`
           # sudo:     provides visudo, which validates the dashboard's sudoers file
           # zip:      used by the sandboxed updater tests
-          sudo apt-get install -y --no-install-recommends nftables sudo zip
+          sudo apt-get install -y --no-install-recommends nftables sudo jq
 
       - name: Show versions
         run: |
-          python3 --version
+          go version
           nft --version
           bash --version | head -1
 
@@ -155,4 +159,4 @@ jobs:
           # is someone's only route to the internet — SC2221 already caught a
           # case glob that installed root-owned job scripts world-readable.
           shellcheck --severity=warning --shell=bash \
-            bin/gw lib/common.sh scripts/*.sh templates/lib/*.sh tests/run.sh
+            lib/common.sh scripts/*.sh templates/lib/*.sh tests/run.sh
