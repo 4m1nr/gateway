@@ -18,13 +18,23 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/am1nr/gateway/internal/buildinfo"
 	"github.com/am1nr/gateway/internal/cli"
 )
 
-// version is stamped by the build. It answers "which code is actually
-// running?", which matters because a stale copy of the binary survives every
-// git pull and makes each fix you pull look like it did nothing.
+// version is an optional -ldflags stamp naming a release. Left at "dev", the
+// binary takes its identity from the VCS information Go records automatically,
+// so no build path can forget to stamp it.
 var version = "dev"
+
+// build is resolved once, against the checkout this binary belongs to.
+func build() buildinfo.Info {
+	repo := ""
+	if paths, err := cli.Resolve(); err == nil {
+		repo = paths.Repo
+	}
+	return buildinfo.Resolve(version, repo)
+}
 
 // ensurePath puts the sbin directories on PATH.
 //
@@ -115,7 +125,11 @@ func main() {
 	case "check":
 		err = cmdCheck(rest)
 	case "version", "--version", "-v":
-		fmt.Println(version)
+		info := build()
+		fmt.Println(info)
+		if warning := info.StaleWarning(); warning != "" {
+			cli.Warn("%s", warning)
+		}
 	case "help", "--help", "-h":
 		usage()
 	default:

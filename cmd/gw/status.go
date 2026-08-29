@@ -57,11 +57,15 @@ func printStatus(f commonFlags, s diag.Status) {
 		fmt.Printf("lifeline    %s — tailscaled is bypassing the tunnel\n", cli.Yellow("ENGAGED"))
 	}
 
-	// Which code is actually running. A stale copy of the binary at
-	// /usr/local/bin/gw survives every git pull, so the box keeps running old
-	// code while the checkout says otherwise — and every fix you pull appears
-	// to have done nothing at all.
-	cli.Dim("version     %s  (%s)", version, f.paths.Repo)
+	// Which code is actually running. bin/gw is a build artefact, so a git pull
+	// updates the checkout and leaves the binary alone — every fix you pull
+	// then appears to have done nothing, and the only evidence is that the
+	// output never changes.
+	info := build()
+	cli.Dim("version     %s  %s", info, f.paths.Repo)
+	if warning := info.StaleWarning(); warning != "" {
+		cli.Warn("%s", warning)
+	}
 	warnIfStaleBinary(f)
 
 	for _, u := range s.Units {
