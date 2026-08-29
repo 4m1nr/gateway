@@ -24,12 +24,10 @@ configs on the box — you edit that file and run `gw apply`.
 
 ```bash
 git clone <this repo> /opt/gateway && cd /opt/gateway
-sudo ln -s /opt/gateway/bin/gw /usr/local/bin/gw
+sudo scripts/00-bootstrap.sh # installs Go, builds bin/gw, base system, static IP
 
-gw init                      # interview; paste your vless:// XHTTP link
+gw init                      # interview; paste your vless:// share link
 gw client add 192.168.1.50 laptop proxy
-
-sudo scripts/00-bootstrap.sh # base system, static IP, clock, logging
 sudo scripts/10-xray.sh      # tunnel, verified over SOCKS before anything is intercepted
 sudo scripts/20-adguard.sh   # LAN DNS
 sudo scripts/30-tailscale.sh # subnet router + exit node
@@ -38,8 +36,10 @@ sudo scripts/50-hardening.sh # ssh, unattended upgrades, timers
 sudo gw check                # prove the whole path end to end
 ```
 
-Run the scripts in order. Each one leaves the box in a working state and tells
-you what to verify before moving on — `10-xray.sh` confirms the tunnel over
+`00-bootstrap.sh` installs the Go toolchain, builds `bin/gw` and links it to
+`/usr/local/bin/gw`; everything after that is a `gw` command. Run the scripts
+in order. Each one leaves the box in a working state and tells you what to
+verify before moving on — `10-xray.sh` confirms the tunnel over
 SOCKS *before* any traffic is intercepted, so a bad XHTTP parameter can't take
 the LAN offline.
 
@@ -543,6 +543,9 @@ The dashboard is built with Node and its output is committed, so the box never
 needs a JavaScript toolchain; CI rebuilds it and fails if the committed output
 does not match its source.
 
-`tests/run.sh` runs anywhere, without root or a network, and feeds every
-generated ruleset to a real `nft -c` inside a user namespace. Run it after any
-change to `lib/` or `templates/`.
+`go test ./...` runs anywhere, without root or a network. It compares every
+generated file against output frozen from before the Go migration, feeds every
+ruleset to a real `nft -c` inside a user namespace, and asserts the firewall
+and routing invariants one at a time. `tests/run.sh` covers what is still
+shell — the install scripts and the runtime helpers — and runs the Go suite
+first.
