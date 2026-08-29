@@ -1,0 +1,118 @@
+package render
+
+import (
+	"fmt"
+
+	"github.com/am1nr/gateway/internal/config"
+	"github.com/am1nr/gateway/internal/jsonx"
+)
+
+// AdGuardOverrides is the AdGuard Home settings the gateway owns.
+//
+// AdGuard owns its own YAML — it rewrites and schema-migrates the file — so we
+// do not template it wholesale. We emit the keys we care about and merge them
+// in, which leaves anything set through its web UI intact across `gw apply`.
+func AdGuardOverrides(c *config.Config) *jsonx.Object {
+	// Domestic names go to the direct resolvers; everything else to DoH, which
+	// rides the tunnel because AdGuard's own egress is captured by the OUTPUT
+	// chain like any other local process.
+	var upstreams []any
+	for _, suffix := range c.DirectSuffixes {
+		for _, res := range c.UpDirect {
+			upstreams = append(upstreams, fmt.Sprintf("[/%s/]%s", suffix, res))
+		}
+	}
+	for _, u := range c.UpProxied {
+		upstreams = append(upstreams, u)
+	}
+	if upstreams == nil {
+		upstreams = []any{}
+	}
+
+	persistent := []any{}
+	for _, cl := range c.Clients {
+		persistent = append(persistent, obj(
+			"name", cl.Name,
+			"ids", arr(cl.IP),
+			"tags", []any{},
+			"use_global_settings", true,
+			"use_global_blocked_services", true,
+			"filtering_enabled", cl.Policy != "direct",
+			"safebrowsing_enabled", false,
+			"parental_enabled", false,
+			"blocked_services", obj(
+				"ids", []any{},
+				"schedule", obj("time_zone", c.Timezone),
+			),
+			"upstreams", []any{},
+			"ignore_querylog", false,
+			"ignore_statistics", false,
+		))
+	}
+
+	filters := []any{}
+	for i, url := range c.Blocklists {
+		name := url
+		if idx := lastIndexByte(url, '/'); idx >= 0 {
+			name = url[idx+1:]
+		}
+		filters = append(filters, obj(
+			"enabled", true,
+			"url", url,
+			"name", name,
+			"id", num(1000+i),
+		))
+	}
+
+	return obj(
+		"http", obj(
+			// Reachable on the LAN and over Tailscale; the input chain is what
+			// keeps it off anything else.
+			"address", fmt.Sprintf("0.0.0.0:%d", c.UIPort),
+		),
+		"dns", obj(
+			"bind_hosts", arr("0.0.0.0"),
+			"port", num(c.DNSPort),
+			"upstream_dns", upstreams,
+			"bootstrap_dns", strs(c.Bootstrap),
+			// Deliberately empty. Falling back to the domestic resolvers means
+			// that whenever DoH is slow — which is exactly when the network is
+			// being interfered with — AdGuard asks a resolver that lies, and
+			// cheerfully caches the lie. A poisoned answer pointing at private
+			// space (10.10.34.34 and friends) is worse than no answer: that
+			// address is in bypass_dst, so the connection is never intercepted,
+			// goes out direct, and dies mid-TLS-handshake looking like a broken
+			// tunnel. Fail closed on DNS, like everything else here.
+			"fallback_dns", []any{},
+			"upstream_mode", "load_balance",
+			"ratelimit", num(0),
+			"enable_dnssec", true,
+			"cache_size", num(8388608),
+			"cache_ttl_min", num(60),
+			"aaaa_disabled", c.IPv6Mode == "off",
+			"local_ptr_upstreams", strs(c.UpDirect),
+		),
+		"querylog", obj(
+			"enabled", true,
+			// Thin-client flash is small and slow; keep retention short.
+			"interval", fmt.Sprintf("%dh", c.QuerylogDays*24),
+			"size_memory", num(1000),
+		),
+		"statistics", obj(
+			"enabled", true,
+			"interval", fmt.Sprintf("%dh", c.StatslogDays*24),
+		),
+		"filters", filters,
+		"clients", obj("persistent", persistent),
+		"filtering", obj("protection_enabled", true, "filtering_enabled", true),
+	)
+}
+
+func lastIndexByte(s string, b byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
