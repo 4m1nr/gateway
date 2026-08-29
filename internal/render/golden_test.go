@@ -102,6 +102,29 @@ func TestBuildTreeMatchesGolden(t *testing.T) {
 				got[f.Path] = f
 			}
 
+			if *update {
+				// Rewrite the tree from the current output. Only ever run
+				// deliberately: these files are the record of what the Python
+				// produced, and regenerating them is how a real regression
+				// would be laundered into a "expected" change.
+				if err := os.RemoveAll(goldenDir); err != nil {
+					t.Fatal(err)
+				}
+				for _, f := range files {
+					dest := filepath.Join(goldenDir, f.Path)
+					if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(dest, []byte(normalise(f.Content, root)), f.Mode); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chmod(dest, f.Mode); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return
+			}
+
 			want, err := treeFiles(goldenDir)
 			if err != nil {
 				t.Fatalf("reading golden tree: %v", err)

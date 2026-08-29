@@ -106,6 +106,13 @@ func (s Systemd) Disable(unit string) error {
 	return nil
 }
 
+// Mask makes a unit unstartable. Used for nftables.service, which would
+// otherwise flush the ruleset out from under gw-network.
+func (s Systemd) Mask(unit string) error {
+	_, err := s.run("systemctl", "mask", unit)
+	return err
+}
+
 // Enable adds units to boot. Enabling a unit that does not exist fails the
 // whole call, so callers pass only what is installed.
 func (s Systemd) Enable(units ...string) error {

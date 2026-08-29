@@ -1172,6 +1172,25 @@ if [ "${1:-}" = "--proxy" ]; then
   shift 2
 fi
 
+# ---------------------------------------------------------------- go ----
+# Commands that have been ported to Go are handed straight to the binary.
+# Everything below this line is still bash and stays that way until it is
+# ported; reverting this block alone puts the whole CLI back on Python.
+#
+# The binary is bin/gw-bin rather than bin/gw so this script remains the entry
+# point during the migration. It becomes bin/gw when the last bash command goes.
+GW_BIN="$REPO/bin/gw-bin"
+case "${1:-}" in
+  render|diff|apply|status|enable|disable|restart|logs|client|job|web|web-action|web-passwd|version)
+    if [ ! -x "$GW_BIN" ]; then
+      die "$GW_BIN is missing. Build it with:
+    cd $REPO && CGO_ENABLED=0 go build -o bin/gw-bin ./cmd/gw"
+    fi
+    export GW_REPO="$REPO" GW_CONFIG="$CONFIG"
+    exec "$GW_BIN" "$@"
+    ;;
+esac
+
 case "${1:-}" in
   render) shift; cmd_render "$@" ;;
   diff)   shift; cmd_diff "$@" || true ;;

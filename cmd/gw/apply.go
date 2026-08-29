@@ -1,14 +1,20 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
+	"github.com/am1nr/gateway/internal/adguard"
 	"github.com/am1nr/gateway/internal/apply"
 	"github.com/am1nr/gateway/internal/cli"
+	"github.com/am1nr/gateway/internal/config"
+	"github.com/am1nr/gateway/internal/jsonx"
+	"github.com/am1nr/gateway/internal/render"
 	"github.com/am1nr/gateway/internal/system"
 )
 
@@ -83,7 +89,7 @@ func cmdApply(args []string) error {
 	}
 
 	if f.root == "/" {
-		if err := postInstall(f, cfg.WebEnabled); err != nil {
+		if err := postInstall(f, cfg); err != nil {
 			return err
 		}
 	}
@@ -91,10 +97,27 @@ func cmdApply(args []string) error {
 	return nil
 }
 
+// adguardYAML is AdGuard Home's own config, which it owns and rewrites.
+const adguardYAML = "/opt/AdGuardHome/AdGuardHome.yaml"
+
 // postInstall does the parts of apply that only make sense against the live
 // system and have no meaning under --root.
-func postInstall(f commonFlags, webEnabled bool) error {
+func postInstall(f commonFlags, cfg *config.Config) error {
 	sd := system.Systemd{}
+	webEnabled := cfg.WebEnabled
+
+	// Debian's nftables.service loads /etc/nftables.conf, which begins with
+	// `flush ruleset` — it would wipe our table out from under gw-network,
+	// which stays "active" (Type=oneshot, RemainAfterExit) while its rules
+	// quietly vanish. Two units cannot both own the ruleset; gw-network does.
+	if sd.Exists("nftables.service") {
+		if sd.IsEnabled("nftables.service") == "enabled" || sd.IsActive("nftables.service") == "active" {
+			cli.Warn("nftables.service is active or enabled; it flushes the whole ruleset.")
+			cli.Warn("Masking it — gw-network manages /etc/nftables.d/gateway.nft instead.")
+			_ = sd.Disable("nftables.service")
+			_ = sd.Mask("nftables.service")
+		}
+	}
 
 	// Keep /usr/local/bin/gw pointing INTO the repo. If it is a copy instead of
 	// a symlink, `git pull` updates the checkout and changes nothing about the
@@ -124,7 +147,57 @@ func postInstall(f commonFlags, webEnabled bool) error {
 	} else {
 		cli.Warn("xray is not installed yet — run scripts/10-xray.sh")
 	}
+
+	// AdGuard's settings are merged rather than templated, because AdGuard owns
+	// that file and rewrites it.
+	if _, err := os.Stat(adguardYAML); err == nil {
+		cli.Info("merging AdGuard Home settings")
+		overrides, err := adguardOverrides(cfg)
+		if err != nil {
+			cli.Warn("%v", err)
+		} else if err := adguard.Merge(adguardYAML, overrides); err != nil {
+			cli.Warn("%v", err)
+		} else {
+			_ = sd.Restart("AdGuardHome.service")
+		}
+	} else {
+		cli.Warn("AdGuard Home is not set up yet — run scripts/20-adguard.sh")
+	}
+
+	// `gw panic` leaves a blanket-masquerade table behind. Applying a real
+	// config must remove it, or the box keeps a stale NAT path that nothing in
+	// the generated ruleset knows about.
+	clearPanicTable()
+
+	if err := sd.Start("gateway.target"); err != nil {
+		cli.Warn("%v", err)
+	}
 	return nil
+}
+
+// adguardOverrides renders the settings block and decodes it into the shape the
+// YAML merge wants.
+func adguardOverrides(cfg *config.Config) (map[string]any, error) {
+	raw, err := jsonx.EncodeIndented(render.AdGuardOverrides(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("building the AdGuard settings: %w", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("building the AdGuard settings: %w", err)
+	}
+	return out, nil
+}
+
+// clearPanicTable removes the table `gw panic` installs, if it is there.
+func clearPanicTable() {
+	if exec.Command("nft", "list", "table", "ip", "gwpanic").Run() != nil {
+		return
+	}
+	cli.Info("clearing the panic-mode NAT table")
+	if err := exec.Command("nft", "delete", "table", "ip", "gwpanic").Run(); err != nil {
+		cli.Warn("could not remove the panic table: %v", err)
+	}
 }
 
 func ensureSymlink(link, target string) error {

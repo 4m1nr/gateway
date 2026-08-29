@@ -8,13 +8,13 @@ PartOf=gateway.target
 Type=simple
 User=gwweb
 Group=gwweb
-Environment=PYTHONPATH=@REPO@/lib
-ExecStart=/usr/bin/python3 @REPO@/lib/webapp.py
+SupplementaryGroups=systemd-journal
+ExecStart=@REPO@/bin/gw web
 Restart=always
 RestartSec=5
 
 # NoNewPrivileges MUST stay off: this service's entire privilege model is a
-# single sudo call to web-action.py, and NoNewPrivileges blocks setuid.
+# single sudo call to the gw-action helper, and NoNewPrivileges blocks setuid.
 NoNewPrivileges=false
 
 ProtectSystem=strict

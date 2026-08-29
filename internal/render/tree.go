@@ -119,12 +119,12 @@ func Build(c *config.Config, opt Options) ([]File, error) {
 	}
 
 	if c.WebEnabled {
-		action, err := templateFile("lib/web-action.py")
-		if err != nil {
-			return nil, err
-		}
-		contents["usr/local/lib/gateway/web-action.py"] = action
-
+		// The privileged helper is not rendered: it is a copy of the gw binary
+		// itself, installed root-owned at /usr/local/lib/gateway/gw-action by
+		// apply. The dashboard's assets are not rendered either — they are
+		// embedded in the binary, so gw-web serves them without depending on
+		// the repo being readable.
+		//
 		// Deliberately contains no secrets: the password hash lives in
 		// /etc/gateway/web-auth.json, 0600 root:root, and is never rendered.
 		settings, err := jsonx.EncodeIndented(obj(
@@ -148,18 +148,6 @@ func Build(c *config.Config, opt Options) ([]File, error) {
 			return nil, err
 		}
 		contents["etc/sudoers.d/gw-web"] = sudoers
-
-		assets, err := fs.ReadDir(gateway.Templates, "templates/web")
-		if err != nil {
-			return nil, err
-		}
-		for _, a := range assets {
-			text, err := templateFile("web/" + a.Name())
-			if err != nil {
-				return nil, err
-			}
-			contents["usr/local/share/gateway/web/"+a.Name()] = text
-		}
 	}
 
 	units, err := fs.ReadDir(gateway.Templates, "templates/systemd")

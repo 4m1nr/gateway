@@ -2,11 +2,12 @@
 #
 # The dashboard's entire privilege surface. One command, no arguments, no
 # wildcards: everything the web process wants to do is described in a JSON
-# request on stdin and re-validated by that script as root.
+# request on stdin and re-validated by that helper as root.
 #
 # Do not widen this to `gw *`. The point of the indirection is that a
-# compromised web process cannot ask for anything web-action.py does not
-# already implement and check.
+# compromised web process cannot ask for anything gw-action does not already
+# implement and check — and because the request travels on stdin, no value
+# derived from an HTTP request ever appears on a command line.
 Defaults:gwweb !requiretty
 Defaults:gwweb !syslog
 # Two forms of the same single command, both spelled out in full so this stays
@@ -14,5 +15,5 @@ Defaults:gwweb !syslog
 # uses: it asks PID 1 to run the helper as a fresh transient unit, outside
 # gw-web's mount namespace and seccomp filter, which the web process itself
 # must keep. The bare form is the fallback where systemd-run is unavailable.
-gwweb ALL=(root) NOPASSWD: /usr/bin/systemd-run --pipe --wait --collect --quiet /usr/local/lib/gateway/web-action.py
-gwweb ALL=(root) NOPASSWD: /usr/local/lib/gateway/web-action.py
+gwweb ALL=(root) NOPASSWD: /usr/bin/systemd-run --pipe --wait --collect --quiet /usr/local/lib/gateway/gw-action
+gwweb ALL=(root) NOPASSWD: /usr/local/lib/gateway/gw-action
