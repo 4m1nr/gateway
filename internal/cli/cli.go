@@ -19,14 +19,30 @@ type Paths struct {
 	Build string
 }
 
+// EnvFile is the settings file `gw apply` renders. It records REPO, which is
+// how a binary living outside the checkout finds it.
+var EnvFile = "/usr/local/lib/gateway/env"
+
 // Resolve works out where the repo is.
 //
-// The documented install symlinks /usr/local/bin/gw into the checkout, so the
-// executable path is the symlink, not its target — without resolving it the
-// root lands in /usr/local and every lookup misses. GW_REPO overrides for
-// anything unusual.
+// Three sources, in order of how much they are trusted:
+//
+//  1. GW_REPO, for anything unusual.
+//  2. The executable's own location. The documented install symlinks
+//     /usr/local/bin/gw into the checkout, so the path is the symlink and not
+//     its target — without resolving it the root lands in /usr/local and every
+//     lookup misses.
+//  3. The REPO value in the rendered env file.
+//
+// The third exists for the privileged helper. It is a COPY of this binary at
+// /usr/local/lib/gateway/gw-action, deliberately outside the repo so the web
+// process cannot rewrite what it sudoes — which means walking up from it gives
+// /usr/local/lib, and every config read then fails with a path nobody
+// recognises. The env file is what apply already writes down for exactly this
+// question.
 func Resolve() (Paths, error) {
 	repo := os.Getenv("GW_REPO")
+
 	if repo == "" {
 		exe, err := os.Executable()
 		if err != nil {
@@ -36,8 +52,18 @@ func Resolve() (Paths, error) {
 			exe = resolved
 		}
 		// bin/gw -> repo root
-		repo = filepath.Dir(filepath.Dir(exe))
+		derived := filepath.Dir(filepath.Dir(exe))
+		if isCheckout(derived) {
+			repo = derived
+		} else if recorded := recordedRepo(); recorded != "" {
+			repo = recorded
+		} else {
+			// Neither worked. Keep the derived answer so the error names a real
+			// path rather than an empty one.
+			repo = derived
+		}
 	}
+
 	abs, err := filepath.Abs(repo)
 	if err != nil {
 		return Paths{}, err
@@ -48,6 +74,32 @@ func Resolve() (Paths, error) {
 		config = filepath.Join(abs, "gateway.toml")
 	}
 	return Paths{Repo: abs, Config: config, Build: filepath.Join(abs, "build")}, nil
+}
+
+// isCheckout reports whether a directory looks like the gateway repo.
+//
+// gateway.toml alone is not enough: it is gitignored, so a fresh clone does not
+// have one yet and `gw init` has to be able to run there. cmd/gw is present in
+// every checkout and in no install directory.
+func isCheckout(dir string) bool {
+	if dir == "" || dir == "/" {
+		return false
+	}
+	for _, marker := range []string{"cmd/gw", "gateway.toml"} {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(marker))); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// recordedRepo reads REPO out of the rendered env file.
+func recordedRepo() string {
+	repo := Env(EnvFile)["REPO"]
+	if repo == "" || !isCheckout(repo) {
+		return ""
+	}
+	return repo
 }
 
 // ---------------------------------------------------------------- output ---
