@@ -22,6 +22,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /api/jobs", s.authed(s.proxyGet("jobs")))
 	mux.HandleFunc("GET /api/outbounds", s.authed(s.proxyGet("outbounds")))
 	mux.HandleFunc("GET /api/config/generated", s.authed(s.proxyGet("generated_config")))
+	mux.HandleFunc("GET /api/diff", s.authed(s.proxyGet("diff")))
 
 	// Mutating. Each is a distinct action name, so the helper's whitelist is
 	// the real authorisation surface rather than a URL pattern.
@@ -32,6 +33,11 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/jobs/{name}/toggle", s.authed(s.handleJobToggle))
 	mux.HandleFunc("POST /api/outbounds/import", s.authed(s.handleImportLink))
 	mux.HandleFunc("POST /api/units/{unit}/restart", s.authed(s.handleRestartUnit))
+	mux.HandleFunc("POST /api/apply", s.authed(s.handleApply))
+
+	// Everything else is the dashboard itself. Registered last and at the
+	// root, so it never shadows an API route.
+	mux.Handle("/", s.serveStatic())
 
 	s.mux = mux
 }
@@ -235,6 +241,13 @@ func (s *Server) handleRestartUnit(w http.ResponseWriter, r *http.Request, _ *we
 	unit := r.PathValue("unit")
 	s.Log.Info("unit restart", "peer", peerAddr(r), "unit", unit)
 	s.call(w, action.Request{Action: "restart_unit", Unit: unit})
+}
+
+// ----------------------------------------------------------------- apply --
+
+func (s *Server) handleApply(w http.ResponseWriter, r *http.Request, _ *webauth.Session) {
+	s.Log.Info("apply", "peer", peerAddr(r))
+	s.call(w, action.Request{Action: "apply"})
 }
 
 func firstLine(s string) string {

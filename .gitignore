@@ -33,3 +33,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+
+# Dashboard build inputs. dist/ is committed on purpose: the box builds the Go
+# binary without Node, and the assets are embedded at compile time.
+dashboard/node_modules/

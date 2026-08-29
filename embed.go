@@ -15,3 +15,12 @@ import "embed"
 //
 //go:embed templates
 var Templates embed.FS
+
+// Dashboard is the built web dashboard: the Vite output, committed so a
+// checkout builds without Node and so the running service has no dependency on
+// the repo being present. gw-web runs as gwweb under ProtectSystem=strict, and
+// a service that cannot read its own assets is a dashboard that fails exactly
+// when it is needed.
+//
+//go:embed all:dashboard/dist
+var Dashboard embed.FS

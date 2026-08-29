@@ -115,6 +115,10 @@ func (h Handler) Handle(req Request) Response {
 		return h.generatedConfig()
 	case "restart_unit":
 		return h.restartUnit(req)
+	case "diff":
+		return h.diff()
+	case "apply":
+		return h.applyNow()
 	}
 	return fail("unknown action: %q", req.Action)
 }

@@ -54,6 +54,12 @@ func main() {
 		err = cmdRestart(rest)
 	case "logs":
 		err = cmdLogs(rest)
+	case "web":
+		err = cmdWeb(rest)
+	case "web-action":
+		err = cmdWebAction(rest)
+	case "web-passwd":
+		err = cmdWebPasswd(rest)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -81,6 +87,7 @@ func usage() {
   gw disable       stop the stack and remove it from boot
   gw restart       restart the whole stack
   gw logs          follow every relevant journal at once
+  gw web-passwd    set the dashboard password
   gw version       which build is running
 
 Flags:
