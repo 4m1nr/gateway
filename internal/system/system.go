@@ -29,6 +29,16 @@ func (s Systemd) timeout() time.Duration {
 	return s.Timeout
 }
 
+// Querying is a Systemd whose calls are bounded tightly, for read-only status
+// where a hung systemctl must not stall the caller. Restarting a unit can
+// legitimately take a minute; asking what state it is in cannot.
+func (s Systemd) Querying() Systemd {
+	if s.Timeout != 0 {
+		return s
+	}
+	return Systemd{Timeout: 10 * time.Second}
+}
+
 func (s Systemd) run(name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout())
 	defer cancel()
@@ -133,21 +143,56 @@ func (s Systemd) IsEnabled(unit string) string {
 	return "disabled"
 }
 
-// Show reads unit properties as a map.
+// Show reads one unit's properties.
 func (s Systemd) Show(unit string, properties ...string) map[string]string {
-	args := []string{"show", unit}
+	all := s.ShowMany([]string{unit}, properties...)
+	return all[unit]
+}
+
+// ShowMany reads properties for several units in a single call.
+//
+// One systemctl invocation per unit costs about a second each on a thin
+// client, and the dashboard polls status continuously — nine units was nine
+// seconds. systemd separates each unit's block with a blank line and identifies
+// it with Id=, so one call answers for all of them.
+func (s Systemd) ShowMany(units []string, properties ...string) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	if len(units) == 0 {
+		return out
+	}
+	// Id is always requested: it is how each block is attributed to its unit,
+	// and systemd may report a different name than the one asked for (an alias,
+	// or a template instance).
+	args := append([]string{"show"}, units...)
+	args = append(args, "--property=Id")
 	for _, p := range properties {
 		args = append(args, "--property="+p)
 	}
-	out, _ := s.run("systemctl", args...)
-	props := map[string]string{}
-	for _, line := range strings.Split(out, "\n") {
-		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if ok {
-			props[k] = v
+	raw, _ := s.run("systemctl", args...)
+
+	blocks := strings.Split(raw, "\n\n")
+	for i, block := range blocks {
+		props := map[string]string{}
+		for _, line := range strings.Split(block, "\n") {
+			if k, v, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+				props[k] = v
+			}
+		}
+		if len(props) == 0 {
+			continue
+		}
+		name := props["Id"]
+		if name == "" && i < len(units) {
+			// A unit systemd knows nothing about still gets a block, but
+			// without an Id. Positional order is systemd's own, so fall back to
+			// it rather than dropping the entry.
+			name = units[i]
+		}
+		if name != "" {
+			out[name] = props
 		}
 	}
-	return props
+	return out
 }
 
 // StackUnits is the gateway stack. gateway.target is the umbrella; the rest are

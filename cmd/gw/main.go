@@ -44,6 +44,16 @@ func main() {
 		err = cmdClient(rest)
 	case "job":
 		err = cmdJob(rest)
+	case "status":
+		err = cmdStatus(rest)
+	case "enable":
+		err = cmdEnable(rest)
+	case "disable":
+		err = cmdDisable(rest)
+	case "restart":
+		err = cmdRestart(rest)
+	case "logs":
+		err = cmdLogs(rest)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -66,6 +76,11 @@ func usage() {
   gw apply         render, diff, validate, install, reload
   gw client        add/remove/list per-client policy
   gw job           add/remove/list scheduled jobs
+  gw status        services, boot state, tunnel state, killswitch drops
+  gw enable        enable the whole stack to start on boot
+  gw disable       stop the stack and remove it from boot
+  gw restart       restart the whole stack
+  gw logs          follow every relevant journal at once
   gw version       which build is running
 
 Flags:
