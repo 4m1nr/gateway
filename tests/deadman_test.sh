@@ -113,6 +113,20 @@ wpa_supplicant.service disabled inactive
 nftables.service disabled inactive
 FIXTURE
 
+# The same box after an earlier bootstrap run has already converted it: networkd
+# is now the manager and NetworkManager is off. This is what a re-run snapshots,
+# and it is the shape that made a rollback silently do nothing.
+UNITS_CONVERTED="$WORK/units.converted"
+cat > "$UNITS_CONVERTED" <<'FIXTURE'
+NetworkManager.service disabled inactive
+networking.service notfound inactive
+systemd-networkd.service enabled active
+systemd-networkd-wait-online.service enabled active
+systemd-resolved.service enabled active
+wpa_supplicant.service disabled inactive
+nftables.service masked inactive
+FIXTURE
+
 traced() { grep -qF "$1" "$TRACE"; }
 # order <first> <second> — is the first traced line strictly before the second?
 order() {
@@ -275,6 +289,53 @@ order "ip addr flush dev enp3s0" "systemctl start NetworkManager.service" \
 order "systemctl enable NetworkManager.service" "systemctl start NetworkManager.service" \
   && ok "the enable pass completes before anything is started" \
   || bad "units are started during the enable pass"
+
+echo
+echo "== a re-run: networkd was already the manager =="
+# The case that actually stranded a box. A second bootstrap run snapshots a
+# machine networkd already owns, so the old code skipped the whole hand-back
+# branch: the .network file was deleted and networkd was never reloaded, which
+# changes nothing live. The box sat on the static address it was stranded by,
+# and a reboot would have left networkd with no config for the interface at all.
+fresh
+: > "$ROOT/etc/systemd/network/10-gateway-wan.network"          # already converted
+printf 'Address=10.9.9.9/24\n' > "$ROOT/etc/systemd/network/10-gateway-wan.network"
+harness "$UNITS_CONVERTED" do_snapshot >/dev/null 2>&1
+[ -f "$STATE/wan.network" ] \
+  && ok "the snapshot records the .network file that was already installed" \
+  || bad "an already-converted box was snapshotted as if it were pristine"
+
+out=$(harness "$UNITS_CONVERTED" do_snapshot 2>&1)
+printf '%s' "$out" | grep -q "already converted" \
+  && ok "and says so, rather than implying a pre-gateway rollback" \
+  || bad "no warning that the snapshot is of an already-converted box"
+
+printf 'enp3s0\n' > "$STATE/wan_if"
+: > "$TRACE"
+printf 'Address=192.168.1.2/24\n' > "$ROOT/etc/systemd/network/10-gateway-wan.network"
+harness "$UNITS_CONVERTED" do_restore >/dev/null 2>&1
+traced "systemctl restart systemd-networkd" \
+  && ok "networkd is restarted, so the file change reaches the live link" \
+  || bad "networkd was never reloaded — the static address stays applied"
+traced "ip addr flush dev enp3s0" \
+  && ok "the link is flushed, since a restart alone does not withdraw an address" \
+  || bad "the address is never withdrawn from the interface"
+order "ip addr flush dev enp3s0" "systemctl restart systemd-networkd" \
+  && ok "flushed before the restart, not after" \
+  || bad "restarted before flushing, so networkd reapplies over a stale address"
+grep -q 'Address=10.9.9.9/24' "$ROOT/etc/systemd/network/10-gateway-wan.network" 2>/dev/null \
+  && ok "the .network file is restored to what it held before, not deleted" \
+  || bad "the .network file was left as: $(cat "$ROOT/etc/systemd/network/10-gateway-wan.network" 2>/dev/null || echo GONE)"
+
+echo
+echo "== a first install: nothing was there to put back =="
+# The other half of the same branch. With no .network file in the snapshot,
+# restore must DELETE the generated one rather than resurrect it.
+post_install_root
+harness "$UNITS_BEFORE" do_restore >/dev/null 2>&1
+[ ! -e "$ROOT/etc/systemd/network/10-gateway-wan.network" ] \
+  && ok "the generated file is deleted when there was none before" \
+  || bad "a file that never existed before the install was recreated"
 
 echo
 echo "== restore unmasks what it re-enables, and what it re-disables =="

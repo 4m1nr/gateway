@@ -95,6 +95,19 @@ do_snapshot() {
   # exits non-zero, so a bare `|| echo unknown` appends a SECOND line and the
   # record becomes three lines pretending to be one. head -1 first, then fall
   # back only on genuinely empty output.
+  # If an earlier bootstrap run already converted this box, the gateway's own
+  # .network file is here NOW — so "the state before" is itself a gateway state.
+  # Record it and say so plainly: a rollback returns the box to THAT, not to a
+  # pre-gateway network, and someone re-arming between install steps has to know
+  # which of the two they are being given.
+  if [ -f "$WAN_NETWORK" ]; then
+    cp -a "$WAN_NETWORK" "$STATE/wan.network"
+    warn "$WAN_NETWORK is already installed — this box is already converted"
+    warn "a rollback restores that file, not a pre-gateway network"
+  else
+    rm -f "$STATE/wan.network"
+  fi
+
   : > "$STATE/units"
   local u en ac
   for u in "${TRACKED[@]}"; do
@@ -176,23 +189,46 @@ do_restore() {
   log "nft tables and policy routing removed"
 
   # 3. The generated network and kernel configuration.
-  rm -f "$WAN_NETWORK"
+  if [ -f "$STATE/wan.network" ]; then
+    # It was there before this run, so putting the box back means putting it
+    # back — deleting it would leave networkd with no config for the interface
+    # at all, which survives a reboot and is worse than the state we are undoing.
+    install -D -m 0644 "$STATE/wan.network" "$WAN_NETWORK"
+    log "restored the .network file that was already installed"
+  else
+    rm -f "$WAN_NETWORK"
+    log "removed the generated .network file"
+  fi
   rm -f "$GW_SYSCTL"
   sysctl --system >/dev/null 2>&1 || true
-  log "generated network and sysctl files removed"
 
   # 4. Hand the interface back. systemd-networkd has to let go of the static
   #    address before another manager can configure the link, and it will not
   #    do that just because it was stopped.
+  #
+  # networkd does not withdraw an address just because the config that set it
+  # is gone, so every file change above is inert until the link is flushed and
+  # the manager reloaded. Skipping that when networkd was ALREADY the manager —
+  # which is what a re-run of bootstrap records — is what made a rollback look
+  # like it had done nothing: the file was removed and the box sat on the static
+  # address it was stranded by until someone power-cycled it.
   local wan prev_networkd
   wan=$(cat "$STATE/wan_if" 2>/dev/null || true)
   prev_networkd=$(awk '$1=="systemd-networkd.service"{print $2}' "$STATE/units" 2>/dev/null || true)
-  if [ "$prev_networkd" != "enabled" ]; then
+  if [ "$prev_networkd" = "enabled" ]; then
+    # networkd stays, but must forget our config. Flush first: a restart alone
+    # reapplies configuration without withdrawing what is already on the link.
+    # `|| true`: with no wan_if recorded the test is false, and under set -e a
+    # failing && list would abort the rollback here — halfway through.
+    [ -n "$wan" ] && ip addr flush dev "$wan" >/dev/null 2>&1 || true
+    systemctl restart systemd-networkd >/dev/null 2>&1 || true
+    log "networkd owned this link before; flushed ${wan:-it} and restarted it"
+  else
+    # Another manager owned it. Stop networkd BEFORE flushing, or it simply
+    # puts the address back on.
     systemctl stop systemd-networkd.socket systemd-networkd.service >/dev/null 2>&1 || true
-    if [ -n "$wan" ]; then
-      ip addr flush dev "$wan" >/dev/null 2>&1 || true
-      log "flushed $wan"
-    fi
+    [ -n "$wan" ] && ip addr flush dev "$wan" >/dev/null 2>&1 || true
+    log "stopped networkd and flushed ${wan:-the link}"
   fi
 
   # 5. Put the tracked units back exactly as they were. Enable/disable first
