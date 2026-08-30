@@ -39,10 +39,19 @@ sudo gw check                # prove the whole path end to end
 
 `00-bootstrap.sh` runs twice, and stops the first time on purpose: the network
 setup needs `net.static_ip` and `net.wan_if`, which `gw init` writes — and
-`gw init` needs the binary the first run builds. Both runs are idempotent. If
-this box has no direct route to the internet yet, the config that would hold
-the proxy does not exist either, so pass it in the environment:
-`sudo GW_PROXY=socks5h://127.0.0.1:1080 scripts/00-bootstrap.sh`.
+`gw init` needs the binary the first run builds. Both runs are idempotent, so
+re-running is the normal path rather than a recovery.
+
+**If this box cannot reach the internet directly**, the first run has no config
+to read a proxy from yet — that file does not exist until `gw init`. Pass it in
+the environment for that one command:
+
+```bash
+sudo GW_PROXY=socks5h://127.0.0.1:1080 scripts/00-bootstrap.sh
+```
+
+Then put it in `gateway.toml` under `[bootstrap] socks_proxy` and every later
+script picks it up on its own. See [Bootstrap proxy](#bootstrap-proxy).
 
 Run the scripts in order. Each one leaves the box in a working state and tells you what to
 verify before moving on — `10-xray.sh` confirms the tunnel over
@@ -280,24 +289,49 @@ Setup happens before the tunnel exists, so a box that cannot reach the internet
 directly has a chicken-and-egg problem: it needs the internet to install the
 thing that gives it the internet.
 
+There is a second turn of the same screw, and it decides how this is
+configured: the proxy setting lives in `gateway.toml`, which `gw init` writes —
+and `gw init` is a command in a binary the first bootstrap run builds. So on a
+first install there is no config to read a proxy out of yet.
+
+**Where each stage reads it from:**
+
+| when | source |
+|---|---|
+| first `00-bootstrap.sh` — packages and the build | `GW_PROXY` in the environment, and nothing else |
+| after `gw init`, every later script | `bootstrap.socks_proxy` in `gateway.toml` |
+| any command, at any time | `gw --proxy ...` or `GW_PROXY=...`, which override both |
+| once the tunnel is up | nothing — see below |
+
+So a first install behind a proxy starts like this:
+
+```bash
+sudo GW_PROXY=socks5h://127.0.0.1:1080 scripts/00-bootstrap.sh
+```
+
+and after `gw init` has written the config, the setting carries the rest:
+
 ```toml
 [bootstrap]
 socks_proxy = "socks5h://127.0.0.1:1080"
-```
-
-```bash
-sudo gw --proxy socks5h://127.0.0.1:1080 update xray    # one-off override
 ```
 
 Every download the setup and update paths make goes through one helper, so this
 single setting covers Xray, AdGuard, geodata and apt. Prefer `socks5h://` so
 DNS is resolved at the proxy rather than locally.
 
-It applies **only** before the gateway works. Once it is running, the box's own
-traffic is already routed through Xray by the OUTPUT chain, and this should be
-left empty. The apt proxy in particular is written and removed around the
-commands that need it, rather than left in `/etc/apt/apt.conf.d` where it would
-break apt the day the bootstrap proxy goes away.
+**It stops being used the moment the tunnel works.** Once the watchdog reports a
+working tunnel, the box's own traffic is already routed through Xray by the
+OUTPUT chain — sending a download through the proxy as well would push it out
+through a tunnel that is already carrying it, and would fail outright on a box
+whose bootstrap proxy has since been shut down. You do not need to clear the
+setting by hand; it is ignored while the tunnel is up, and used again if the
+tunnel goes down and something needs fetching. An explicit `gw --proxy` still
+wins either way, because passing it is a statement of intent.
+
+The apt proxy in particular is written and removed around the commands that
+need it, rather than left in `/etc/apt/apt.conf.d` where it would break apt the
+day the bootstrap proxy goes away.
 
 ## Custom routing
 

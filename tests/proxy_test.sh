@@ -147,5 +147,26 @@ done
 [ "$disagreements" -eq 0 ] && ok "common.sh and net.sh agree in all 16 combinations"
 
 echo
+echo "== the README documents what the code does =="
+# A table of behaviour in the README is only useful while it is true. These are
+# the three claims it makes that are cheap to check mechanically.
+readme=README.md
+if grep -q 'GW_PROXY.*environment, and nothing else' "$readme"; then
+  ok "the README says the first bootstrap run reads only GW_PROXY"
+else
+  bad "the README no longer explains where the first bootstrap run reads the proxy from"
+fi
+if grep -q 'bootstrap.socks_proxy.*gateway.toml' "$readme"; then
+  ok "the README says later scripts read the config"
+else
+  bad "the README no longer says where later scripts read the proxy from"
+fi
+if grep -qi 'ignored while the tunnel is up' "$readme"; then
+  ok "the README says the proxy stops being used once the tunnel is up"
+else
+  bad "the README does not mention that the proxy is skipped once the tunnel is up"
+fi
+
+echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
