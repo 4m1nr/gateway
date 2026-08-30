@@ -14,10 +14,12 @@ import { Alert, Button, Input } from "./ui";
 export function Login({
   passwordSet,
   helperError,
+  version,
   onSignedIn,
 }: {
   passwordSet: boolean;
   helperError: string;
+  version: string;
   onSignedIn: () => void;
 }) {
   const [password, setPassword] = useState("");
@@ -99,6 +101,10 @@ export function Login({
         >
           {busy ? "Signing in…" : "Sign in"}
         </Button>
+
+        {version && (
+          <p className="text-center font-mono text-[10px] text-muted">{version}</p>
+        )}
       </form>
     </div>
   );

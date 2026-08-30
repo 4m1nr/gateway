@@ -249,6 +249,10 @@ export interface BackupPreview {
 export interface Session {
   authenticated: boolean;
   password_set: boolean;
+  /** The build serving this page. The assets are embedded in the binary, so a
+   *  gw-web that was not restarted serves the previous build's pages — this is
+   *  how you tell. */
+  version: string;
   /** Set when the privileged helper could not be reached at all. Distinct from
    *  password_set: one is fixed with `gw web-passwd`, the other is not. */
   helper_error: string;

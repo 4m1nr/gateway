@@ -46,6 +46,7 @@ func cmdWeb(args []string) error {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	srv := web.New(settings, log)
 	srv.Privileged = web.SudoCaller{HelperPath: *helper}
+	srv.Version = build().Short()
 
 	scheme := "http"
 	if settings.TLS {

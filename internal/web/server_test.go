@@ -416,3 +416,25 @@ func TestWorkingHelperWithAPasswordReportsItSet(t *testing.T) {
 		t.Errorf("a box with a password reports %+v", body)
 	}
 }
+
+// The build serving the page must be visible before logging in.
+//
+// The dashboard's assets are embedded in the binary, so a gw-web that was not
+// restarted after a deploy serves the previous build's pages indefinitely — and
+// from the browser there is nothing to distinguish that from "the deploy did
+// not include what I expected". This is how you tell.
+func TestSessionReportsTheRunningBuild(t *testing.T) {
+	s := newTestServer(t, &fakeHelper{password: "hunter2hunter2"})
+	s.Version = "47dc734"
+
+	w := request(t, s, "GET", "/api/session", "192.168.1.50", "", nil, nil)
+	var body struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Version != "47dc734" {
+		t.Errorf("version is %q, want the running build", body.Version)
+	}
+}

@@ -103,6 +103,7 @@ export function App() {
       <Login
         passwordSet={session.password_set}
         helperError={session.helper_error ?? ""}
+        version={session.version ?? ""}
         onSignedIn={() => void loadSession()}
       />
     );
@@ -116,7 +117,7 @@ export function App() {
     <BrowserRouter>
       {pending && <PendingApply onApplied={() => setPending(false)} />}
       <Routes>
-        <Route element={<Layout status={status} onSignOut={signOut} />}>
+        <Route element={<Layout status={status} version={session.version ?? ""} onSignOut={signOut} />}>
           <Route index element={<Overview />} />
           <Route path="clients" element={<Clients onPending={() => setPending(true)} />} />
           <Route

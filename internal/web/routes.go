@@ -92,7 +92,12 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		"authenticated": sess != nil,
 		"password_set":  configured,
 		"helper_error":  helperError,
-		"csrf":          nil,
+		// Unauthenticated on purpose: it identifies the build that is serving
+		// this page, which is exactly what you need before logging in to
+		// something that looks wrong. It reveals nothing an attacker cannot
+		// read from the repository.
+		"version": s.Version,
+		"csrf":    nil,
 	}
 	if sess != nil {
 		body["csrf"] = sess.CSRF

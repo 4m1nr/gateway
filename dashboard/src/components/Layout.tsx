@@ -61,9 +61,11 @@ function useTheme() {
 
 export function Layout({
   status,
+  version,
   onSignOut,
 }: {
   status: Status | null;
+  version: string;
   onSignOut: () => void;
 }) {
   const [dark, setDark] = useTheme();
@@ -105,6 +107,14 @@ export function Layout({
         <div className="space-y-3 border-t border-border p-3">
           <div className="px-2">
             <TunnelPill status={status} />
+            {version && (
+              <p
+                className="mt-2 font-mono text-[10px] text-muted"
+                title="The build serving this page. If it is not what you just deployed, gw-web has not been restarted."
+              >
+                {version}
+              </p>
+            )}
             {status?.lifeline && (
               <p className="mt-2 text-[11px] leading-snug text-warn">
                 Lifeline engaged — tailscaled is bypassing the tunnel so remote

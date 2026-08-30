@@ -50,7 +50,12 @@ const sessionCookie = "gw_session"
 
 // Server is the dashboard.
 type Server struct {
-	Settings   Settings
+	Settings Settings
+	// Version identifies the running build. Shown in the dashboard, because
+	// "am I looking at the new dashboard?" is otherwise unanswerable from the
+	// dashboard — the assets are embedded, so a gw-web that was not restarted
+	// serves the previous binary's pages indefinitely.
+	Version    string
 	Sessions   *webauth.Sessions
 	Lockout    *webauth.Lockout
 	Privileged Caller
