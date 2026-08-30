@@ -171,8 +171,12 @@ func (b *builder) subFirstRE(text string, re *regexp.Regexp, replacement string)
 
 const profilesSuffix = `
 [[upstream]]
-name = "work"
-file = "outbounds/work.json"
+name     = "work"
+file     = "outbounds/work.json"
+location = "outside"
+# Inside 10.20.0.0/16 below, which the profile already routes here. nftables
+# rejects overlapping intervals outright, so this shape has to stay covered.
+dns      = "10.20.0.53"
 
 [[profile]]
 name = "work-laptop"

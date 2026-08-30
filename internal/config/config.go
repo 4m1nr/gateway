@@ -279,13 +279,18 @@ func (c *Config) parseRouting(raw map[string]any) error {
 	if err != nil {
 		return err
 	}
+	var extraPrefixes []netip.Prefix
 	for _, cidr := range extra {
 		p, err := parsePrefix(cidr, "routing.extra_local_networks")
 		if err != nil {
 			return err
 		}
-		c.ExtraLocal = append(c.ExtraLocal, p.String())
+		extraPrefixes = append(extraPrefixes, p)
 	}
+	// Two overlapping entries here would be rejected by nftables as
+	// conflicting intervals, and the whole ruleset would fail to load over
+	// what is really a redundant line in the config.
+	c.ExtraLocal = collapsePrefixes(extraPrefixes)
 	if c.DropPrivate, err = boolean(rt, "drop_private_destinations", true); err != nil {
 		return err
 	}

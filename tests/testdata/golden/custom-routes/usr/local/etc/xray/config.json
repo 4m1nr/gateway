@@ -19,6 +19,13 @@
         "skipFallback": false
       },
       {
+        "address": "10.20.0.53",
+        "domains": [
+          "domain:corp.work-example.com"
+        ],
+        "skipFallback": true
+      },
+      {
         "address": "178.22.122.100",
         "domains": [
           "geosite:private",
@@ -258,6 +265,16 @@
         "type": "field",
         "inboundTag": [
           "probe-work-in"
+        ],
+        "outboundTag": "up-work"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "dns-in"
+        ],
+        "ip": [
+          "10.20.0.53/32"
         ],
         "outboundTag": "up-work"
       },

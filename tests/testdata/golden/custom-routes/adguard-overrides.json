@@ -8,6 +8,7 @@
     ],
     "port": 53,
     "upstream_dns": [
+      "[/corp.work-example.com/]10.20.0.53",
       "[/ir/]178.22.122.100",
       "[/ir/]185.51.200.2",
       "https://1.1.1.1/dns-query",

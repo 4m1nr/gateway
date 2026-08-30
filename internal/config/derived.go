@@ -2,6 +2,7 @@ package config
 
 import (
 	"net/netip"
+	"sort"
 	"strings"
 )
 
@@ -130,16 +131,47 @@ func (c *Config) RoutedPrivate() []string {
 		}
 	}
 
-	sortPrefixes(out)
-	res := make([]string, 0, len(out))
-	var last string
-	for _, p := range out {
-		if p.String() != last { // the same range named by two profiles
-			res = append(res, p.String())
-			last = p.String()
+	return collapsePrefixes(out)
+}
+
+// collapsePrefixes drops any prefix another one already covers.
+//
+// nftables interval sets reject overlapping elements outright — the ruleset
+// does not load at all — and an upstream's resolver almost always sits inside
+// the range that upstream serves, so this is the normal case rather than a
+// corner one. Exact duplicates go the same way: the same range named by two
+// profiles is one range.
+func collapsePrefixes(in []netip.Prefix) []string {
+	// Broadest first, so the prefix that covers the others is always the one
+	// already kept when they are examined.
+	sorted := append([]netip.Prefix(nil), in...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Bits() != sorted[j].Bits() {
+			return sorted[i].Bits() < sorted[j].Bits()
+		}
+		return sorted[i].Addr().Less(sorted[j].Addr())
+	})
+
+	var kept []netip.Prefix
+	for _, p := range sorted {
+		covered := false
+		for _, k := range kept {
+			if subnetOf(p, k) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			kept = append(kept, p)
 		}
 	}
-	return res
+
+	sortPrefixes(kept)
+	out := make([]string, 0, len(kept))
+	for _, p := range kept {
+		out = append(out, p.String())
+	}
+	return out
 }
 
 // PoisonedDst is RFC1918 space that is NOT reachable from here.

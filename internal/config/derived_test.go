@@ -197,3 +197,96 @@ func covers(nets []netip.Prefix, lan netip.Prefix) bool {
 	}
 	return false
 }
+
+// nftables interval sets reject overlapping elements and the ruleset does not
+// load at all — so an upstream's resolver, which almost always sits inside the
+// range that upstream serves, took the whole gateway down at validation.
+func TestRoutedPrivateHasNoOverlappingIntervals(t *testing.T) {
+	cfg, err := loadWith(t, `
+[[upstream]]
+name = "work"
+json = """{"protocol":"freedom","settings":{}}"""
+dns  = "172.30.18.4"
+
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+
+  [[profile.route]]
+  via = "work"
+  ips = ["172.30.0.0/16"]
+
+[[client]]
+ip     = "192.168.1.20"
+name   = "laptop"
+policy = "work-laptop"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.RoutedPrivate()
+	if len(got) != 1 || got[0] != "172.30.0.0/16" {
+		t.Errorf("RoutedPrivate() = %v, want just the covering range", got)
+	}
+	assertDisjoint(t, got)
+}
+
+// The resolver still has to be there when nothing else covers it.
+func TestAResolverOutsideTheRoutedRangeIsKept(t *testing.T) {
+	cfg, err := loadWith(t, `
+[[upstream]]
+name = "work"
+json = """{"protocol":"freedom","settings":{}}"""
+dns  = "10.9.9.9"
+
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+
+  [[profile.route]]
+  via = "work"
+  ips = ["172.30.0.0/16"]
+
+[[client]]
+ip     = "192.168.1.20"
+name   = "laptop"
+policy = "work-laptop"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.RoutedPrivate()
+	if len(got) != 2 {
+		t.Fatalf("RoutedPrivate() = %v, want both ranges", got)
+	}
+	assertDisjoint(t, got)
+}
+
+func TestOverlappingExtraLocalNetworksAreCollapsed(t *testing.T) {
+	cfg, err := loadWith(t, `
+[routing]
+extra_local_networks = ["192.168.0.0/24", "192.168.0.0/16", "10.5.0.0/16"]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDisjoint(t, cfg.ExtraLocal)
+	if len(cfg.ExtraLocal) != 2 {
+		t.Errorf("extra_local_networks = %v, want the /16 and the 10.5 range", cfg.ExtraLocal)
+	}
+}
+
+func assertDisjoint(t *testing.T, cidrs []string) {
+	t.Helper()
+	for i, a := range cidrs {
+		for j, b := range cidrs {
+			if i >= j {
+				continue
+			}
+			pa, pb := netip.MustParsePrefix(a), netip.MustParsePrefix(b)
+			if pa.Overlaps(pb) {
+				t.Errorf("%s and %s overlap — nft rejects the whole ruleset", a, b)
+			}
+		}
+	}
+}
