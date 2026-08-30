@@ -25,7 +25,6 @@ import (
 var executable = map[string]bool{
 	"usr/local/lib/gateway/ip-rules.sh":       true,
 	"usr/local/lib/gateway/health.sh":         true,
-	"usr/local/lib/gateway/geoupdate.sh":      true,
 	"usr/local/lib/gateway/ts-bypass.sh":      true,
 	"usr/local/lib/gateway/xray-update.sh":    true,
 	"usr/local/lib/gateway/adguard-update.sh": true,

@@ -16,7 +16,7 @@ info "generating configs"
 "$REPO/bin/gw" render >/dev/null
 
 install -D -m 0644 "$REPO/build/usr/local/lib/gateway/env" /usr/local/lib/gateway/env
-for s in net.sh geoupdate.sh ip-rules.sh ts-bypass.sh xray-update.sh; do
+for s in net.sh ip-rules.sh ts-bypass.sh xray-update.sh; do
   [ -f "$REPO/build/usr/local/lib/gateway/$s" ] \
     && install -D -m 0755 "$REPO/build/usr/local/lib/gateway/$s" "/usr/local/lib/gateway/$s"
 done
@@ -30,7 +30,7 @@ GW_PROXY="${GW_PROXY:-$(gw_proxy)}" REPO="$REPO" \
   /usr/local/lib/gateway/xray-update.sh "$(version_of xray)"
 
 info "fetching geodata (this is what makes the domestic split useful)"
-/usr/local/lib/gateway/geoupdate.sh || warn "geodata fetch failed — the bundled geoip/geosite from the release will be used instead"
+"$REPO/bin/gw" agent geoupdate || warn "geodata fetch failed — the bundled geoip/geosite from the release will be used instead"
 
 info "staging the Xray config"
 install -D -m 0644 "$REPO/build/usr/local/etc/xray/config.json" \

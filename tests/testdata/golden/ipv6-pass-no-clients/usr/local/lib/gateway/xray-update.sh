@@ -129,7 +129,7 @@ if [ -x "$BIN" ]; then
 fi
 install -m 0755 "$TMP/x/xray" "$BIN"
 
-# Only seed geodata if there is none; geoupdate.sh owns it after that.
+# Only seed geodata if there is none; `gw agent geoupdate` owns it after that.
 install -d "$SHARE"
 for f in geoip.dat geosite.dat; do
   [ -f "$TMP/x/$f" ] && [ ! -f "$SHARE/$f" ] && install -m 0644 "$TMP/x/$f" "$SHARE/$f"

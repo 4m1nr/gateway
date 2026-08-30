@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/am1nr/gateway/internal/cli"
+	"github.com/am1nr/gateway/internal/system"
 )
 
 // helperDir is where `gw apply` installs the update scripts. Each one downloads,
@@ -188,10 +189,8 @@ func apt(args ...string) error {
 // withAptProxy writes the apt proxy config around fn and removes it after,
 // whatever happens.
 func withAptProxy(fn func() error) error {
-	proxy := os.Getenv("GW_PROXY")
-	if proxy == "" {
-		proxy = cli.Env(helperDir + "/env")["BOOTSTRAP_PROXY"]
-	}
+	proxy := system.BootstrapProxy(
+		cli.Env(helperDir + "/env")["BOOTSTRAP_PROXY"], os.Getenv("GW_PROXY"))
 	if proxy == "" {
 		return fn()
 	}

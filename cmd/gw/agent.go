@@ -130,13 +130,10 @@ func orNone2(s string) string {
 	return s
 }
 
-// bootstrapProxy honours a one-off --proxy override the same way the rest of
-// the update path does.
+// bootstrapProxy applies the shared rule: an explicit override wins, the
+// configured proxy is skipped once the tunnel is carrying traffic.
 func bootstrapProxy(configured string) string {
-	if override := os.Getenv("GW_PROXY"); override != "" {
-		return override
-	}
-	return configured
+	return system.BootstrapProxy(configured, os.Getenv("GW_PROXY"))
 }
 
 // cmdAdGuardMerge applies the gateway's AdGuard settings.

@@ -234,6 +234,63 @@ for f in scripts/*.sh templates/lib/*.sh lib/common.sh; do
 done
 
 echo
+echo "== every helper a script invokes is actually rendered =="
+# scripts/20-adguard.sh called lib/agh_merge.py for a while after that file was
+# deleted, and scripts/10-xray.sh called geoupdate.sh after it became Go. Both
+# fail only when the script runs, which for an install script means on somebody
+# else's first install.
+if command -v go >/dev/null 2>&1 && [ -x bin/gw ]; then
+  RENDER=$(mktemp -d)
+  if GW_REPO="$PWD" ./bin/gw render --config tests/fixtures/default.toml --out "$RENDER" --quiet >/dev/null 2>&1; then
+    dangling=""
+    for ref in $(grep -rhoE '/usr/local/lib/gateway/[A-Za-z0-9_.-]+' scripts/ templates/ 2>/dev/null | sort -u); do
+      name="${ref##*/}"
+      # env and jobs/ are written by apply, not by the renderer's helper list;
+      # gw-action is a copy of the binary.
+      case "$name" in env|jobs|gw-action) continue ;; esac
+      [ -e "$RENDER/usr/local/lib/gateway/$name" ] || dangling="$dangling $name"
+    done
+    if [ -z "$dangling" ]; then
+      ok "every /usr/local/lib/gateway helper referenced by a script is rendered"
+    else
+      bad "scripts reference helpers that are never rendered:$dangling"
+    fi
+
+    missing=""
+    for ref in $(grep -rhoE '\$REPO/[A-Za-z0-9_./-]+' scripts/ 2>/dev/null | sort -u); do
+      path="${ref#\$REPO/}"
+      case "$path" in *'$'*|*'{'*|build/*|gateway.toml) continue ;; esac
+      [ -e "$path" ] || missing="$missing $path"
+    done
+    if [ -z "$missing" ]; then
+      ok "every repo file referenced by a script exists"
+    else
+      bad "scripts reference files that do not exist:$missing"
+    fi
+  else
+    bad "could not render to check script references"
+  fi
+  rm -rf "$RENDER"
+else
+  printf '  - gw is not built; skipping the reference check\n'
+fi
+
+echo
+echo "== the bootstrap proxy is skipped once the tunnel is up =="
+# The proxy exists for fetching things before the tunnel can carry them. Using
+# it afterwards sends the download out through a tunnel already carrying it.
+if grep -q 'gw_tunnel_is_up' templates/lib/net.sh; then
+  ok "net.sh checks the tunnel before using the configured proxy"
+else
+  bad "net.sh uses BOOTSTRAP_PROXY regardless of whether the tunnel is up"
+fi
+if sed -n '/^gw_proxy()/,/^}/p' templates/lib/net.sh | grep -q 'GW_PROXY'; then
+  ok "an explicit GW_PROXY override still wins"
+else
+  bad "gw_proxy no longer honours an explicit override"
+fi
+
+echo
 echo "== no Python is left in the gateway =="
 # The point of the migration: a box with no working internet cannot
 # pip-install anything, and a stdlib-only Python was the previous answer to

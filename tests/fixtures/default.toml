@@ -37,6 +37,13 @@ mode = "off"
 #  Override for a single command with:  gw --proxy socks5h://127.0.0.1:1080 ...
 # ============================================================================
 [bootstrap]
+# Used only while the tunnel cannot carry the download itself. Once the
+# watchdog reports a working tunnel this is ignored automatically — the box's
+# own traffic already goes through Xray, so using the proxy as well would send
+# the download out through a tunnel that is already carrying it, and would fail
+# outright once the proxy is gone. There is no need to clear it by hand.
+#
+# `gw --proxy socks5h://...` overrides for one command, tunnel or not.
 socks_proxy = ""
 
 # ============================================================================

@@ -12,17 +12,31 @@ export PATH
 # Everything that fetches something during setup or update goes through
 # gw_curl, so a single bootstrap proxy setting covers all of it.
 #
-# This matters only before the tunnel exists. Once the gateway is running, the
-# box's own traffic is already routed through Xray by the OUTPUT chain, and
-# BOOTSTRAP_PROXY should normally be left empty.
+# The proxy exists for one situation: fetching things BEFORE the tunnel can
+# carry them. Once it is up, the box's own traffic is already routed through
+# Xray by the OUTPUT chain, so using the proxy as well sends the download out
+# through a tunnel that is already carrying it — wasteful at best, and on a box
+# whose proxy has since been shut down, a failure with no visible cause. So the
+# configured proxy is skipped whenever the watchdog reports a working tunnel.
+#
+# GW_PROXY (environment) overrides unconditionally, for one-off runs: someone
+# passing --proxy has said what they want, and inferring around that would be
+# worse than obeying it.
+gw_tunnel_is_up() {
+  # Anything other than a recorded "up" — down, degraded, or never run — counts
+  # as not up, so the proxy is used when in doubt. Using it unnecessarily costs
+  # a slower download; skipping it when it was needed costs a failed one.
+  [ "$(cat /run/gateway/tunnel 2>/dev/null || true)" = "up" ]
+}
 
-# GW_PROXY (environment) overrides the configured value, for one-off runs.
 gw_proxy() {
   if [ -n "${GW_PROXY:-}" ]; then
     printf '%s' "$GW_PROXY"
-  else
-    printf '%s' "${BOOTSTRAP_PROXY:-}"
+    return
   fi
+  [ -n "${BOOTSTRAP_PROXY:-}" ] || return 0
+  gw_tunnel_is_up && return 0
+  printf '%s' "$BOOTSTRAP_PROXY"
 }
 
 gw_curl() {
