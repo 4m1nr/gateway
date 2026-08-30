@@ -339,7 +339,7 @@ func loadWithSection(t *testing.T, body string) *config.Config {
 	// The appended table wins for the keys it names; TOML rejects a duplicate
 	// table, so the original is removed first where they collide.
 	text := string(raw)
-	for _, table := range []string{"[web]", "[dns]"} {
+	for _, table := range []string{"[web]", "[dns]", "[routing]"} {
 		if !strings.Contains(body, table) {
 			continue
 		}
@@ -536,5 +536,77 @@ policy = "pub"
 `)
 	if got := cfg.RoutedPrivate(); len(got) != 0 {
 		t.Errorf("RoutedPrivate() = %v, want nothing for a public range", got)
+	}
+}
+
+// A network declared reachable has to be reachable from the devices that need
+// the declaration.
+//
+// extra_local_networks kept these out of the poisoned-DNS drop and stopped
+// there. Prerouting returns them as local business, which lands them in the
+// forward chain, where the kill switch drops anything from a proxied client
+// that was not intercepted. So the setting worked for unlisted devices, which
+// were already fine, and did nothing for proxied ones — the symptom being a
+// modem on its own subnet answering a plain laptop and not a proxied one.
+const extraLocal = `
+[routing]
+extra_local_networks = ["192.168.0.0/24"]
+`
+
+func TestExtraLocalNetworksSurviveTheKillSwitch(t *testing.T) {
+	cfg := loadWithSection(t, extraLocal)
+	ruleset, err := NFT(cfg, fixedTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fwd := chain(t, ruleset, "forward")
+
+	local := indexOf(fwd, `comment "extra-local"`)
+	kill := indexOf(fwd, `comment "killswitch"`)
+	if local < 0 {
+		t.Fatal("nothing in the forward chain lets a proxied device reach a " +
+			"network declared local; the kill switch drops it")
+	}
+	if kill < 0 {
+		t.Fatal("no kill switch in the forward chain")
+	}
+	if local > kill {
+		t.Error("the kill switch runs first, so the declared network stays " +
+			"unreachable from exactly the devices the setting exists for")
+	}
+	if !strings.Contains(ruleset, "192.168.0.0/24") {
+		t.Error("the declared network is in no set, so the rule cannot match")
+	}
+}
+
+// Blocking still wins. A blocked device must not reach a local network any more
+// than it reaches the internet.
+func TestBlockedClientsCannotReachExtraLocalNetworks(t *testing.T) {
+	cfg := loadWithSection(t, extraLocal)
+	ruleset, err := NFT(cfg, fixedTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fwd := chain(t, ruleset, "forward")
+
+	blocked := indexOf(fwd, `comment "blocked-client"`)
+	local := indexOf(fwd, `comment "extra-local"`)
+	if blocked < 0 || local < 0 {
+		t.Fatal("expected both a blocked-client drop and an extra-local accept")
+	}
+	if blocked > local {
+		t.Error("a blocked device would reach the local network: the accept " +
+			"runs before the drop")
+	}
+}
+
+// Nothing is added for a config that declares no extra networks.
+func TestNoLocalRuleWithoutExtraLocalNetworks(t *testing.T) {
+	_, ruleset := renderNFT(t, "default")
+	if strings.Contains(ruleset, `comment "extra-local"`) {
+		t.Error("a rule that can never match was added to the forward chain")
+	}
+	if strings.Contains(ruleset, "set local_dst") {
+		t.Error("an empty set was added")
 	}
 }

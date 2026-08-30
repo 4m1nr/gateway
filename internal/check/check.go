@@ -430,8 +430,15 @@ func (r *Runner) checkDNS() {
 	// redirect, a device that names its own resolver keeps it, and everything
 	// AdGuard is here for — filtering, the query log, the split between
 	// domestic and proxied upstreams — quietly does not apply to that device.
+	intercept, known := r.Env["DNS_INTERCEPT"]
 	switch {
-	case r.Env["DNS_INTERCEPT"] != "1":
+	case !known:
+		// The key postdates some installs. Absent is not the same as off, and
+		// saying "off" about a config that reads true sends you to fix a
+		// setting that is already right.
+		r.skip("cannot tell whether DNS is redirected: /usr/local/lib/gateway/env " +
+			"predates this check — run `sudo gw apply` to refresh it")
+	case intercept != "1":
 		r.skip("dns.intercept is off — a device that names its own resolver " +
 			"keeps it, and AdGuard never sees those queries")
 	case nftChainLoaded("dnsintercept"):

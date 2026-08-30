@@ -75,6 +75,29 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 		poisonedRule = "        ip daddr @poisoned_dst counter drop comment \"poisoned-dns\"\n"
 	}
 
+	// routing.extra_local_networks names networks that ARE reachable from here.
+	// Saying so kept them out of the poisoned-DNS drop, but nothing then let an
+	// intercepted device reach them: prerouting returns them as local business,
+	// which lands them in the forward chain, where the killswitch drops
+	// anything from a proxied client that was not intercepted. So the setting
+	// worked for devices that did not need it and did nothing for the ones that
+	// did — the symptom being another subnet, or the modem, reachable from an
+	// unlisted laptop and not from a proxied one.
+	setLocal, localForward := "", ""
+	if len(c.ExtraLocal) > 0 {
+		setLocal = "    set local_dst {\n" +
+			"        type ipv4_addr\n" +
+			"        flags interval\n" +
+			"        comment \"routing.extra_local_networks — reachable directly\"\n" +
+			nftElements(c.ExtraLocal, 8) +
+			"    }\n\n"
+		localForward = "        # Declared reachable in routing.extra_local_networks. Ahead of the\n" +
+			"        # kill switch, which would otherwise drop this for precisely the\n" +
+			"        # proxied devices the setting was added for. Below the blocked-client\n" +
+			"        # drop, so blocking still wins.\n" +
+			"        ip daddr @local_dst counter accept comment \"extra-local\"\n\n"
+	}
+
 	// Both the set and the rule appear only when a route actually names private
 	// space. An empty set, and a rule that can never match, are dead weight in a
 	// file every packet on the box is matched against.
@@ -169,6 +192,8 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 		"FORWARD_DEFAULT":     fwdDefault,
 		"POSTROUTING_DEFAULT": postDefault,
 		"POISONED_RULE":       poisonedRule,
+		"SET_LOCAL":           setLocal,
+		"LOCAL_FORWARD":       localForward,
 		"SET_ROUTED":          setRouted,
 		"ROUTED_RULE":         routedRule,
 		"DNS_INTERCEPT":       dnsChain,

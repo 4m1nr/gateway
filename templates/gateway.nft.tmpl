@@ -51,7 +51,7 @@ table inet gateway {
         comment "private space that is not local here — poisoned DNS answers"
 {{ELEM_POISONED}}    }
 
-{{SET_ROUTED}}    set bypass_dst {
+{{SET_LOCAL}}{{SET_ROUTED}}    set bypass_dst {
         type ipv4_addr
         flags interval
         comment "destinations that must never enter the tunnel"
@@ -213,7 +213,7 @@ table inet gateway {
 
         ip saddr @blocked_clients counter drop comment "blocked-client"
 
-        # opted-out clients: plain NAT out to the router
+{{LOCAL_FORWARD}}        # opted-out clients: plain NAT out to the router
         ip saddr @direct_clients accept
 
         # subnet router: tailnet <-> LAN
