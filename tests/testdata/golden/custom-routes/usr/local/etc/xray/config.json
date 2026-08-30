@@ -369,6 +369,17 @@
         "outboundTag": "proxy"
       },
       {
+        "type": "field",
+        "source": [
+          "192.168.1.2"
+        ],
+        "ip": [
+          "10.20.0.53/32"
+        ],
+        "port": "53",
+        "outboundTag": "up-work"
+      },
+      {
         "domain": [
           "domain:intranet.example.com"
         ],

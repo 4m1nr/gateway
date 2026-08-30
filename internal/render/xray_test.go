@@ -900,3 +900,66 @@ policy = "desk"
 		}
 	}
 }
+
+// The box resolving on a profile device's behalf.
+//
+// AdGuard answers the LAN, so its query to an upstream's resolver comes from
+// the box, not from the device that asked — and every profile rule matches on
+// the device. Without a rule of its own the query falls to the geo split,
+// where geoip:private covers the resolver's own range, and it goes out of the
+// WAN to an address only the upstream can reach. The symptom is a work name
+// that never resolves while the work network itself is reachable.
+func TestTheBoxReachesAnUpstreamResolverThroughItsUpstream(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := configWith(t, upstreamFixture)
+	rs := rules(t, decodeRendered(t, cfg))
+
+	at, geo := -1, -1
+	for i, r := range rs {
+		if sameStringSet(r, "source", []string{cfg.BoxIP}) &&
+			hasStringItem(r, "ip", "172.30.0.53/32") {
+			at = i
+			if tag, _ := r.GetString("outboundTag"); tag != "up-work" {
+				t.Errorf("the box's query goes to %q, not the work upstream", tag)
+			}
+		}
+		if hasStringItem(r, "ip", "geoip:private") {
+			geo = i
+		}
+	}
+	if at < 0 {
+		t.Fatal("nothing routes the box's own query to the resolver, so it falls " +
+			"to the geo split and leaves by the WAN")
+	}
+	if geo >= 0 && at > geo {
+		t.Errorf("the rule is at %d, after the geo split at %d — geoip:private "+
+			"covers the resolver's range and claims it first", at, geo)
+	}
+}
+
+// Narrow on purpose: the resolver is reachable through the upstream alone, and
+// a broader rule would let any intercepted device reach it.
+func TestOnlyTheBoxIsGivenThatRoute(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := configWith(t, upstreamFixture)
+
+	for _, r := range rules(t, decodeRendered(t, cfg)) {
+		if !hasStringItem(r, "ip", "172.30.0.53/32") {
+			continue
+		}
+		if _, viaDNS := r.GetArray("inboundTag"); viaDNS {
+			continue // Xray's own resolver, which is not a device
+		}
+		src, ok := r.GetArray("source")
+		if !ok {
+			t.Errorf("a rule reaches the resolver from any source: %v", r.Keys())
+			continue
+		}
+		if len(src) != 1 || src[0] != cfg.BoxIP {
+			t.Errorf("the route to the resolver is open to %v, not just the box", src)
+		}
+		if port, _ := r.GetString("port"); port != "53" {
+			t.Errorf("the rule is not limited to DNS (port %q)", port)
+		}
+	}
+}

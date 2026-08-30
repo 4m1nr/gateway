@@ -453,6 +453,30 @@ func xrayRouting(c *config.Config) *jsonx.Object {
 		}
 	}
 
+	// The box resolving on a profile device's behalf.
+	//
+	// AdGuard answers the LAN, so its query to an upstream's resolver comes
+	// from this box, not from the device that asked -- and every rule above
+	// matches on the device. Without this the query falls to the geo split,
+	// where geoip:private covers the resolver's own range, and it is sent
+	// direct: out of the WAN, to an address only the upstream can reach.
+	//
+	// Narrow on purpose. Only this box, only that resolver, only port 53: the
+	// resolver is reachable through the upstream alone, and widening the source
+	// here would let any intercepted device reach it.
+	if c.BoxIP != "" {
+		for _, u := range c.Upstreams {
+			if u.DNS == "" {
+				continue
+			}
+			rules = append(rules, obj("type", "field",
+				"source", arr(c.BoxIP),
+				"ip", arr(u.DNS+"/32"),
+				"port", "53",
+				"outboundTag", u.Outbound.Tag))
+		}
+	}
+
 	// position = "before" (the default): after per-client policy, ahead of the
 	// global geo split — so a custom rule wins over "all .ir goes direct".
 	rules = append(rules, custom("before")...)
