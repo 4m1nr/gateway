@@ -189,6 +189,16 @@ Reading this:
                                                  of being intercepted
   bypass-local climbing                          the destination is being treated
                                                  as local
+  dns-redirected climbing                        this device's plain DNS IS being
+                                                 sent to AdGuard
+  dns-not-plain climbing                         it reaches the box but is not
+                                                 plain DNS — DoH or DoT, which
+                                                 no rule here can redirect
+  both DNS counters flat                         its queries never arrive: the
+                                                 resolver is on the local segment
+                                                 (usually the router), so nothing
+                                                 crosses this box. Hand out this
+                                                 box as the DNS server in DHCP.
   all flat                                       the packets never arrive: check
                                                  the client's default gateway
 `)

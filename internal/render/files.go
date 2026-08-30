@@ -127,13 +127,22 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 	// those, the router's DHCP has to hand out this box as the DNS server.
 	dnsChain := "    # dns.intercept = false\n"
 	if c.DNSIntercept {
+		// Counted, all of it. "Is this device's DNS reaching the box at all?"
+		// is the first question when a client is missing from AdGuard's log,
+		// and without counters the honest answer is a guess: a device pointed
+		// at the router resolves on the local segment and never arrives here,
+		// which looks exactly like a redirect that is not working.
 		dnsChain = "    chain dnsintercept {\n" +
 			"        type nat hook prerouting priority dstnat; policy accept;\n" +
 			"        # Opted-out clients keep whatever resolver they chose.\n" +
-			"        ip saddr @direct_clients return\n" +
-			"        ip daddr $BOX return\n" +
+			"        ip saddr @direct_clients counter return comment \"dns-opted-out\"\n" +
+			"        ip daddr $BOX counter return comment \"dns-already-here\"\n" +
 			"        ip saddr $LAN meta l4proto { tcp, udp } th dport 53 \\\n" +
-			fmt.Sprintf("            dnat ip to $BOX:%d\n", c.DNSPort) +
+			fmt.Sprintf("            counter dnat ip to $BOX:%d comment \"dns-redirected\"\n", c.DNSPort) +
+			"        # Anything from the LAN reaching here is DNS this box never\n" +
+			"        # saw: encrypted to somewhere else, or aimed at a resolver on\n" +
+			"        # the local segment that answers without crossing the gateway.\n" +
+			"        ip saddr $LAN counter comment \"dns-not-plain\"\n" +
 			"    }\n"
 	}
 

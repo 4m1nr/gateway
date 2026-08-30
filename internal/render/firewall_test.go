@@ -610,3 +610,35 @@ func TestNoLocalRuleWithoutExtraLocalNetworks(t *testing.T) {
 		t.Error("an empty set was added")
 	}
 }
+
+// "This device is missing from AdGuard's query log" has three causes that look
+// identical from the box: the redirect is broken, the queries are encrypted, or
+// they never cross the gateway at all because the resolver sits on the client's
+// own segment. Without counters on this chain the three cannot be told apart,
+// and the answer is a guess.
+func TestDNSRedirectIsCounted(t *testing.T) {
+	_, ruleset := renderNFT(t, "default")
+	chain := chain(t, ruleset, "dnsintercept")
+
+	for _, want := range []string{"dns-redirected", "dns-not-plain"} {
+		if !strings.Contains(chain, `comment "`+want+`"`) {
+			t.Errorf("no %q counter, so that case cannot be distinguished", want)
+		}
+	}
+	for _, line := range strings.Split(chain, "\n") {
+		if strings.Contains(line, "dnat ip to") && !strings.Contains(line, "counter") {
+			t.Errorf("the redirect itself is uncounted:\n  %s", line)
+		}
+	}
+
+	// The catch-all must be last, or it counts traffic the redirect already
+	// claimed and every reading is inflated.
+	redirect := indexOf(chain, `comment "dns-redirected"`)
+	notPlain := indexOf(chain, `comment "dns-not-plain"`)
+	if redirect < 0 || notPlain < 0 {
+		t.Fatal("expected both counters")
+	}
+	if notPlain < redirect {
+		t.Error("the catch-all counts redirected queries too")
+	}
+}

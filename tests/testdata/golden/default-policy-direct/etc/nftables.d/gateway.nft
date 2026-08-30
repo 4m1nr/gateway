@@ -248,10 +248,14 @@ table inet gateway {
     chain dnsintercept {
         type nat hook prerouting priority dstnat; policy accept;
         # Opted-out clients keep whatever resolver they chose.
-        ip saddr @direct_clients return
-        ip daddr $BOX return
+        ip saddr @direct_clients counter return comment "dns-opted-out"
+        ip daddr $BOX counter return comment "dns-already-here"
         ip saddr $LAN meta l4proto { tcp, udp } th dport 53 \
-            dnat ip to $BOX:53
+            counter dnat ip to $BOX:53 comment "dns-redirected"
+        # Anything from the LAN reaching here is DNS this box never
+        # saw: encrypted to somewhere else, or aimed at a resolver on
+        # the local segment that answers without crossing the gateway.
+        ip saddr $LAN counter comment "dns-not-plain"
     }
 
     chain postrouting {

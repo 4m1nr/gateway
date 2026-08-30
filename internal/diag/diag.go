@@ -62,7 +62,14 @@ type Forwarding struct {
 }
 
 // diagChains are read in the order a packet meets them.
-var diagChains = []string{"prerouting", "input", "forward", "output", "postrouting"}
+//
+// dnsintercept is here because "this device is missing from AdGuard's query
+// log" is otherwise unanswerable from the box: a device pointed at a resolver
+// on its own segment never sends a packet through the gateway, which looks
+// identical to a redirect that is not working.
+var diagChains = []string{
+	"prerouting", "dnsintercept", "input", "forward", "output", "postrouting",
+}
 
 var (
 	counterRE = regexp.MustCompile(`counter packets (\d+)`)
