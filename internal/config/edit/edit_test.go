@@ -320,3 +320,169 @@ func TestRemoveRefusesHandWrittenJobs(t *testing.T) {
 		t.Fatalf("expected a refusal naming the hand-written job, got %v", err)
 	}
 }
+
+// The formats a person actually writes.
+//
+// Every one of these is a client the gateway enforces. A strict pattern matched
+// only the first, so the other three were invisible in the dashboard and to
+// `gw client list` while the firewall applied them — a client list that
+// disagrees with the running gateway is worse than no client list.
+const handWritten = `[net]
+wan_if = "eth0"
+
+# The TV, which must not go through the tunnel.
+[[client]]
+ip     = "192.168.1.60"
+name   = "tv"
+policy = "direct"
+
+[[client]]
+ip = "192.168.1.61"
+name = "tight-spacing"
+policy = "direct"
+
+[[client]]
+name   = "keys-reordered"
+ip     = "192.168.1.62"
+policy = "block"
+
+[[client]]
+ip     = "192.168.1.63"   # the kid's tablet
+name   = "trailing-comment"
+policy = "proxy"
+`
+
+func TestClientsWrittenByHandAreListed(t *testing.T) {
+	clients := parseClients(handWritten)
+	if len(clients) != 4 {
+		t.Fatalf("got %d of the 4 entries in the file: %+v", len(clients), clients)
+	}
+	want := map[string]string{
+		"192.168.1.60": "direct",
+		"192.168.1.61": "direct",
+		"192.168.1.62": "block",
+		"192.168.1.63": "proxy",
+	}
+	for _, c := range clients {
+		if policy, ok := want[c.IP]; !ok || c.Policy != policy {
+			t.Errorf("%s read back as policy %q, want %q", c.IP, c.Policy, want[c.IP])
+		}
+		if c.Name == "" {
+			t.Errorf("%s has no name", c.IP)
+		}
+	}
+}
+
+// The consequence of not seeing them: add could not find the entry it was
+// replacing, appended a second one for the same address, and config.Load then
+// refused the whole file as a duplicate. The dashboard wrote a config the
+// gateway could not start from.
+func TestAddingOverAHandWrittenClientDoesNotDuplicateIt(t *testing.T) {
+	path := tempConfig(t, handWritten)
+	replaced, err := AddClient(path, Client{
+		IP: "192.168.1.61", Name: "tight-spacing", Policy: "proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced != "direct" {
+		t.Errorf("replaced policy reported as %q, want direct", replaced)
+	}
+
+	clients, _ := Clients(path)
+	if len(clients) != 4 {
+		t.Fatalf("the file now holds %d entries for 4 devices: %+v", len(clients), clients)
+	}
+	seen := map[string]int{}
+	for _, c := range clients {
+		seen[c.IP]++
+	}
+	for ip, n := range seen {
+		if n > 1 {
+			t.Errorf("%s appears %d times — config.Load rejects that outright", ip, n)
+		}
+	}
+	for _, c := range clients {
+		if c.IP == "192.168.1.61" && c.Policy != "proxy" {
+			t.Errorf("the policy did not change: %q", c.Policy)
+		}
+	}
+}
+
+// A replaced entry keeps its place, so the comment written above it goes on
+// describing the device it was written for.
+func TestReplacingAClientKeepsItsPositionAndComment(t *testing.T) {
+	path := tempConfig(t, handWritten)
+	if _, err := AddClient(path, Client{
+		IP: "192.168.1.60", Name: "tv", Policy: "block"}); err != nil {
+		t.Fatal(err)
+	}
+	body := read(t, path)
+	comment := "# The TV, which must not go through the tunnel.\n[[client]]\nip     = \"192.168.1.60\""
+	if !strings.Contains(body, comment) {
+		t.Errorf("the entry moved out from under its comment:\n%s", body)
+	}
+	if !strings.Contains(body, `wan_if = "eth0"`) {
+		t.Error("the rest of the file was disturbed")
+	}
+}
+
+func TestRemovingAHandWrittenClientWorks(t *testing.T) {
+	path := tempConfig(t, handWritten)
+	if err := RemoveClient(path, "192.168.1.62"); err != nil {
+		t.Fatal(err)
+	}
+	clients, _ := Clients(path)
+	if len(clients) != 3 {
+		t.Fatalf("got %d entries after removing one of 4: %+v", len(clients), clients)
+	}
+	for _, c := range clients {
+		if c.IP == "192.168.1.62" {
+			t.Error("the entry is still there")
+		}
+	}
+	if strings.Contains(read(t, path), "keys-reordered") {
+		t.Error("the entry's body was left behind")
+	}
+}
+
+// An entry holding something this package does not model is still listed —
+// the gateway enforces it either way — but rewriting it in the canonical
+// three-key form would drop that setting without saying so.
+func TestClientsWithUnmodelledSettingsAreListedButNotRewritten(t *testing.T) {
+	const withExtra = `[[client]]
+ip     = "192.168.1.64"
+name   = "future"
+policy = "proxy"
+bandwidth_limit = "10mbit"
+`
+	path := tempConfig(t, withExtra)
+
+	clients, _ := Clients(path)
+	if len(clients) != 1 {
+		t.Fatalf("the entry is not listed: %+v", clients)
+	}
+	if clients[0].Editable {
+		t.Error("an entry with an unmodelled key is offered as editable")
+	}
+
+	if _, err := AddClient(path, Client{
+		IP: "192.168.1.64", Name: "future", Policy: "block"}); err == nil {
+		t.Error("rewriting it was allowed, which drops bandwidth_limit silently")
+	}
+	if err := RemoveClient(path, "192.168.1.64"); err == nil {
+		t.Error("removing it was allowed")
+	}
+	if !strings.Contains(read(t, path), "bandwidth_limit") {
+		t.Error("the unmodelled setting was dropped anyway")
+	}
+}
+
+// Ordinary entries stay editable, or the check above would make the whole page
+// read-only.
+func TestOrdinaryClientsRemainEditable(t *testing.T) {
+	for _, c := range parseClients(handWritten) {
+		if !c.Editable {
+			t.Errorf("%s (%s) was marked uneditable", c.IP, c.Name)
+		}
+	}
+}

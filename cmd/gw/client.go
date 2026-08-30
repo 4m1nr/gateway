@@ -101,8 +101,19 @@ func clientList(f commonFlags, asJSON bool) error {
 		ipw = max(ipw, len(c.IP))
 		polw = max(polw, len(c.Policy))
 	}
+	uneditable := false
 	for _, c := range clients {
-		fmt.Printf("%-*s  %-*s  %s\n", ipw, c.IP, polw, c.Policy, c.Name)
+		note := ""
+		if !c.Editable {
+			// Listed, because the gateway enforces it; flagged, because
+			// `gw client rm` will refuse rather than drop a setting it does
+			// not model.
+			note, uneditable = "  *", true
+		}
+		fmt.Printf("%-*s  %-*s  %s%s\n", ipw, c.IP, polw, c.Policy, c.Name, note)
+	}
+	if uneditable {
+		fmt.Println("\n* holds settings beyond ip/name/policy — edit these in gateway.toml")
 	}
 	return nil
 }

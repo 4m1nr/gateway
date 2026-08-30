@@ -120,7 +120,10 @@ export function Clients({ onPending }: { onPending: () => void }) {
         )}
       </Panel>
 
-      <Panel title="Overrides" description={`${data.clients.length} listed`}>
+      <Panel
+        title="Overrides"
+        description={`${data.clients.length} listed — every [[client]] in gateway.toml, however it was written`}
+      >
         {data.clients.length === 0 ? (
           <Empty>No overrides — every device gets the default.</Empty>
         ) : (
@@ -142,13 +145,22 @@ export function Clients({ onPending }: { onPending: () => void }) {
                     <PolicyBadge policy={c.policy} profiles={data.profiles} />
                   </td>
                   <td className="py-2 text-right">
-                    <Button
-                      variant="danger"
-                      onClick={() => void remove(c.ip)}
-                      title={`Remove ${c.ip}`}
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
+                    {c.editable ? (
+                      <Button
+                        variant="danger"
+                        onClick={() => void remove(c.ip)}
+                        title={`Remove ${c.ip}`}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    ) : (
+                      <span
+                        className="text-[11px] text-muted"
+                        title="This entry holds settings the editor does not model. It is in force; change it in gateway.toml."
+                      >
+                        edit in the file
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}

@@ -117,6 +117,10 @@ export interface Client {
   ip: string;
   name: string;
   policy: string;
+  /** Whether this entry can be rewritten from here. False when it holds
+   *  settings the editor does not model — it is still enforced, and still
+   *  listed, but it is changed in the file. */
+  editable: boolean;
 }
 
 export interface ClientsResponse {
