@@ -96,60 +96,6 @@ else
   bad "gw_curl without --max-time in:$(echo "$missing_timeout" | tr ' ' '\n' | sort -u | tr '\n' ' ')"
 fi
 
-echo "== rp_filter is disabled on every interface, not just the WAN =="
-# The reverse-path check before local delivery runs with mark 0, so it skips
-# the fwmark rule and can land in another table (Tailscale installs one that
-# matches everything). With rp_filter on, the mismatch is a martian and the
-# packet dies between prerouting and input with no counter anywhere.
-# The effective value is max(all, <iface>), so setting `all` alone is not enough.
-if grep -q 'for f in /proc/sys/net/ipv4/conf/\*/rp_filter' templates/lib/ip-rules.sh; then
-  ok "ip-rules.sh clears rp_filter on every interface"
-else
-  bad "ip-rules.sh only sets rp_filter for some interfaces — later ones (tailscale0) will keep the default"
-fi
-
-# The reverse lookup must resolve in main, ahead of Tailscale's catch-all rule
-# at priority 5270, or validation can reject LAN clients as martians.
-if grep -q 'ip rule add to "$LAN_CIDR" lookup main pref 90' templates/lib/ip-rules.sh; then
-  ok "reverse-path lookups for the LAN are pinned to the main table"
-else
-  bad "no rule pinning LAN reverse-path lookups to main — another table can claim them"
-fi
-
-echo "== intermittent-fault evidence =="
-# A fault that comes and go defeats every live command: by the time anyone runs
-# `gw diag` the box is healthy again, and healthy is exactly what it reports.
-# So the box has to record while it happens, and gw history has to read it back.
-if grep -q 'STATE/history' templates/lib/health.sh; then
-  ok "the health probe records one sample per run"
-else
-  bad "the health probe records nothing, so an intermittent fault leaves no trace"
-fi
-
-# The ring buffer lives in tmpfs and must be bounded, or a box up for months
-# fills /run.
-if grep -q 'tail -n "\$KEEP" "\$STATE/history"' templates/lib/health.sh; then
-  ok "the sample ring buffer is trimmed"
-else
-  bad "the sample ring buffer grows without bound in tmpfs"
-fi
-
-# Restarting Xray drops every live connection on every client. A watchdog that
-# does that on one timed-out probe manufactures the outage it exists to catch.
-probe_curls=$(sed -n '/^probe_intercepted()/,/^}/p' templates/lib/health.sh | grep -c 'curl ')
-if [ "$probe_curls" -ge 2 ]; then
-  ok "the health probe retries before declaring a failure ($probe_curls attempts)"
-else
-  bad "the health probe declares failure on a single timeout, and the failure path restarts Xray"
-fi
-
-if grep -q 'NOT restarting xray' templates/lib/health.sh; then
-  ok "a tunnel that is moving bytes is not restarted out from under its clients"
-else
-  bad "the health probe restarts Xray even when the tunnel is demonstrably passing traffic"
-fi
-
-# The evidence that guard depends on: sum the downlink of real outbounds only.
 echo "== install scripts resolve through symlinks =="
 # The scripts source lib/common.sh relative to themselves, which fails before
 # common.sh can fix anything — so each one has to resolve $0 through symlinks
@@ -306,7 +252,7 @@ fi
 # The focused suites. Each runs the real script against a scratch tree rather
 # than grepping it, so they are kept separate — a grep and a behavioural test
 # reading the same file would look like two checks and be one.
-for suite in tests/proxy_test.sh tests/update_test.sh tests/deps_test.sh; do
+for suite in tests/proxy_test.sh tests/update_test.sh tests/agent_test.sh tests/deps_test.sh; do
   echo
   echo "== $(basename "$suite" .sh) =="
   if out=$(bash "$suite" 2>&1); then

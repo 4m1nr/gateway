@@ -289,6 +289,10 @@ func xrayRouting(c *config.Config) *jsonx.Object {
 		rules = append(rules, obj("type", "field",
 			"domain", strs(c.BlockGeosite), "outboundTag", "block"))
 	}
+	if len(c.BlockGeoIP) > 0 {
+		rules = append(rules, obj("type", "field",
+			"ip", strs(c.BlockGeoIP), "outboundTag", "block"))
+	}
 	if c.BlockBittorrent {
 		rules = append(rules, obj("type", "field",
 			"protocol", arr("bittorrent"), "outboundTag", "block"))

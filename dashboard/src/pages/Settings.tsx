@@ -107,6 +107,7 @@ interface RoutingSettings {
   direct_geosite?: string[];
   direct_geoip?: string[];
   block_geosite?: string[];
+  block_geoip?: string[];
   block_bittorrent?: boolean;
   extra_local_networks?: string[];
   drop_private_destinations?: boolean;
@@ -141,6 +142,14 @@ function GeoSplit({ doc, onSaved }: { doc: ConfigDoc; onSaved: () => void }) {
           value={v.block_geosite}
           placeholder="geosite:category-ads-all"
           onChange={(block_geosite) => patch({ block_geosite })}
+        />
+        <ListField
+          label="Blocked networks"
+          hint="Dropped for every client, ahead of per-device policy. Geodata tags or plain CIDRs."
+          rows={3}
+          value={v.block_geoip}
+          placeholder={"geoip:cn\n198.51.100.0/24"}
+          onChange={(block_geoip) => patch({ block_geoip })}
         />
         <ListField
           label="Other local networks"

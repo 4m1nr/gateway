@@ -5,9 +5,13 @@
 # It never opens a direct path for client traffic. A broken tunnel stays
 # fail-closed; the only thing the lifeline frees is tailscaled itself.
 set -uo pipefail
-. /usr/local/lib/gateway/env
+# Overridable for the same reason xray-update.sh takes them: this escalates to
+# restarting Xray and rewriting nftables, and none of that can be exercised
+# against paths only root on the real box can write.
+GW_LIB="${GW_LIB:-/usr/local/lib/gateway}"
+. "$GW_LIB/env"
 
-STATE=/run/gateway
+STATE="${GW_STATE:-/run/gateway}"
 mkdir -p "$STATE"
 FAILS=$(cat "$STATE/fails" 2>/dev/null || echo 0)
 LIFELINE=$(cat "$STATE/lifeline" 2>/dev/null || echo 0)
@@ -22,7 +26,7 @@ lifeline_on() {
     systemctl try-restart tailscaled >/dev/null 2>&1
     sleep 2
   fi
-  if /usr/local/lib/gateway/ts-bypass.sh lifeline on 2>/dev/null; then
+  if "$GW_LIB/ts-bypass.sh" lifeline on 2>/dev/null; then
     if [ "$LIFELINE" != "1" ]; then
       echo 1 > "$STATE/lifeline"
       log err "tunnel down ${LIFELINE_MIN}m+ — Tailscale lifeline ENGAGED (tailscaled now direct). Client traffic stays fail-closed."
@@ -37,7 +41,7 @@ lifeline_on() {
 
 lifeline_off() {
   [ "$LIFELINE" = "1" ] || return 0
-  /usr/local/lib/gateway/ts-bypass.sh lifeline off
+  "$GW_LIB/ts-bypass.sh" lifeline off
   echo 0 > "$STATE/lifeline"
   systemctl try-restart tailscaled >/dev/null 2>&1
   log notice "tunnel recovered — Tailscale lifeline released"
@@ -119,8 +123,8 @@ echo "$STATUS" > "$STATE/tunnel"
 # live command — by the time anyone looks, the box is healthy again — so the
 # only way to explain one is to have been recording while it happened.
 # `gw history` reads this back.
-CT_CUR=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
-CT_MAX=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
+CT_CUR=$(cat "${GW_CONNTRACK:-/proc/sys/net/netfilter}/nf_conntrack_count" 2>/dev/null || echo 0)
+CT_MAX=$(cat "${GW_CONNTRACK:-/proc/sys/net/netfilter}/nf_conntrack_max" 2>/dev/null || echo 0)
 RSS=$(ps -o rss= -C xray 2>/dev/null | awk '{s+=$1} END{printf "%d", s/1024}')
 printf '%s %s ct=%s/%s rss=%sM load=%s rx=+%s\n' \
   "$(date -u +%FT%TZ)" "$STATUS" "$CT_CUR" "$CT_MAX" "${RSS:-0}" \

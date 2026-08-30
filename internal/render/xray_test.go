@@ -507,3 +507,37 @@ policy = "work-laptop"
 	}
 	return cfg
 }
+
+// Blocked networks are a global drop: they must land ahead of every rule that
+// could route the same traffic somewhere, including a per-client policy and a
+// profile's own exceptions. A block that a device-specific rule can overtake is
+// not a block.
+func TestBlockedNetworksBeatEveryRoutingRule(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := loadFixture(t, "reality-fallback")
+	if len(cfg.BlockGeoIP) == 0 {
+		t.Fatal("the fixture no longer configures blocked networks")
+	}
+
+	rs := rules(t, decodeRendered(t, cfg))
+	blocked := -1
+	for i, r := range rs {
+		tag, _ := r.GetString("outboundTag")
+		if tag == "block" && sameStringSet(r, "ip", cfg.BlockGeoIP) {
+			blocked = i
+			break
+		}
+	}
+	if blocked < 0 {
+		t.Fatal("routing.block_geoip produced no rule at all")
+	}
+
+	// Only the api rule and position="first" custom rules may precede it —
+	// both are deliberately above the block section.
+	for i, r := range rs[:blocked] {
+		if r.Has("source") {
+			t.Errorf("rule %d matches specific clients before the network block "+
+				"at %d, so those clients would reach a blocked network", i, blocked)
+		}
+	}
+}

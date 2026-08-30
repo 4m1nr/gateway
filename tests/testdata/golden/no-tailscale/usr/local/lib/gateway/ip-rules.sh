@@ -3,7 +3,13 @@
 # route is `local default dev lo`, which makes the kernel deliver them to the
 # transparent socket instead of forwarding them.
 set -eu
-. /usr/local/lib/gateway/env
+GW_LIB="${GW_LIB:-/usr/local/lib/gateway}"
+. "$GW_LIB/env"
+
+# The sysctl tree, overridable so the rp_filter and accept_local guarantees can
+# be tested. Both are load-bearing: with either wrong, intercepted packets are
+# dropped as martians between prerouting and input, with no counter anywhere.
+CONF="${GW_NET_CONF:-/proc/sys/net/ipv4/conf}"
 
 case "${1:-up}" in
   up)
@@ -25,7 +31,7 @@ case "${1:-up}" in
     # enough, and interfaces created after sysctl ran (tailscale0) inherit
     # `default` from whenever they appeared. Setting every one of them is cheap
     # and idempotent.
-    for f in /proc/sys/net/ipv4/conf/*/rp_filter; do
+    for f in "$CONF"/*/rp_filter; do
       [ -w "$f" ] && echo 0 > "$f" 2>/dev/null || true
     done
 
@@ -48,7 +54,7 @@ case "${1:-up}" in
 
     # Belt and braces: with rp_filter off, accept_local makes the kernel skip
     # that reverse lookup entirely rather than depend on how it resolves.
-    for f in /proc/sys/net/ipv4/conf/*/accept_local; do
+    for f in "$CONF"/*/accept_local; do
       [ -w "$f" ] && echo 1 > "$f" 2>/dev/null || true
     done
     ;;

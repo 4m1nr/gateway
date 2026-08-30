@@ -17,7 +17,7 @@ set -eu
 
 CHAIN="${1:?usage: ts-bypass.sh <exceptions|lifeline> <on|off>}"
 ACTION="${2:?usage: ts-bypass.sh <exceptions|lifeline> <on|off>}"
-CGROUP=/sys/fs/cgroup/system.slice/tailscaled.service
+CGROUP="${GW_CGROUP:-/sys/fs/cgroup/system.slice/tailscaled.service}"
 
 case "$ACTION" in
   on)

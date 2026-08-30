@@ -265,6 +265,9 @@ func (c *Config) parseRouting(raw map[string]any) error {
 	if c.BlockGeosite, err = stringList(rt, "block_geosite", nil); err != nil {
 		return err
 	}
+	if c.BlockGeoIP, err = stringList(rt, "block_geoip", nil); err != nil {
+		return err
+	}
 	if c.BlockBittorrent, err = boolean(rt, "block_bittorrent", false); err != nil {
 		return err
 	}

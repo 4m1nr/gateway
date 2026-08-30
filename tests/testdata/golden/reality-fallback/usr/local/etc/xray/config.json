@@ -242,6 +242,14 @@
       },
       {
         "type": "field",
+        "ip": [
+          "geoip:cn",
+          "198.51.100.0/24"
+        ],
+        "outboundTag": "block"
+      },
+      {
+        "type": "field",
         "protocol": [
           "bittorrent"
         ],

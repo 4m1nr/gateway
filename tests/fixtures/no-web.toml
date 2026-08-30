@@ -181,6 +181,7 @@ enabled = false
 direct_geosite = ["geosite:private", "geosite:category-ir"]
 direct_geoip   = ["geoip:private", "geoip:ir"]
 block_geosite  = []          # e.g. ["geosite:category-ads-all"]
+block_geoip    = []          # e.g. ["geoip:cn", "198.51.100.0/24"]
 block_bittorrent = false     # true = drop torrent traffic at the gateway
 
 # Drop client traffic aimed at private space that is not reachable here,

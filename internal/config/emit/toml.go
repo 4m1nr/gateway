@@ -174,7 +174,8 @@ var layout = []section{
 		keys: []entry{
 			{"direct_geosite", "domains that bypass the tunnel"},
 			{"direct_geoip", "networks that bypass the tunnel"},
-			{"block_geosite", ""},
+			{"block_geosite", "domains dropped outright, for every client"},
+			{"block_geoip", "networks dropped outright, for every client"},
 			{"block_bittorrent", ""},
 			{"extra_local_networks", "private ranges genuinely reachable here, beyond this LAN"},
 			{"drop_private_destinations",

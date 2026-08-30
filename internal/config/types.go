@@ -135,6 +135,7 @@ type Config struct {
 	DirectGeosite   []string
 	DirectGeoIP     []string
 	BlockGeosite    []string
+	BlockGeoIP      []string
 	BlockBittorrent bool
 	ExtraLocal      []string
 	DropPrivate     bool

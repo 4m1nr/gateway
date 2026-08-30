@@ -42,6 +42,7 @@ func Build(example string) ([]Fixture, error) {
 		t = b.sub(t, `file = "outbounds/main.json"`, `file = "outbounds/reality.json"`)
 		t = b.sub(t, "block_bittorrent = false", "block_bittorrent = true")
 		t = b.sub(t, "block_geosite  = []", `block_geosite  = ["geosite:category-ads-all"]`)
+		t = b.sub(t, "block_geoip    = []", `block_geoip    = ["geoip:cn", "198.51.100.0/24"]`)
 		return b.sub(t, `[xray.fallback]
 enabled = false
 # file      = "outbounds/backup.json"
