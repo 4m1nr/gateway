@@ -2,6 +2,9 @@ package render
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/am1nr/gateway/internal/config"
@@ -382,4 +385,125 @@ func indexOfSameRule(rs []*jsonx.Object, want *jsonx.Object) int {
 		}
 	}
 	return -1
+}
+
+// Everything that means "the tunnel" must fail over together.
+//
+// "proxy" names the primary outbound, but what a rule means by it is "through
+// the tunnel" — and with a fallback configured the tunnel is the balancer. A
+// rule pinned to the primary keeps using a dead server while everything else
+// fails over, so a profile client loses connectivity at exactly the moment the
+// failover existed to prevent that.
+func TestEverythingThatMeansTheTunnelFailsOverTogether(t *testing.T) {
+	cfg := loadFixture(t, "reality-fallback")
+	t.Chdir(repoRoot(t))
+	if cfg.Fallback == nil {
+		t.Fatal("the fixture no longer configures a fallback")
+	}
+
+	rs := rules(t, decodeRendered(t, cfg))
+	for i, r := range rs {
+		tag, _ := r.GetString("outboundTag")
+		if tag != "proxy" {
+			continue
+		}
+		t.Errorf("rule %d still targets the primary outbound directly, so it "+
+			"would not fail over: %v", i, r.Keys())
+	}
+
+	// And the balancer it points at has to exist, or every one of those rules
+	// routes nowhere.
+	routing, _ := decodeRendered(t, cfg).GetObject("routing")
+	balancers, ok := routing.GetArray("balancers")
+	if !ok || len(balancers) == 0 {
+		t.Fatal("rules reference a balancer that is not declared")
+	}
+}
+
+// A profile whose base is proxy inherits the failover, which is the case that
+// prompted this: the device is intercepted, its unmatched traffic goes to the
+// tunnel, and "the tunnel" has to mean the same thing for it as for everyone
+// else.
+func TestProfileInheritsFailoverFromProxy(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := configWithFallbackAndProfile(t)
+
+	rs := rules(t, decodeRendered(t, cfg))
+	found := false
+	for _, r := range rs {
+		if !sameStringSet(r, "source", []string{"192.168.1.70"}) {
+			continue
+		}
+		if r.Has("domain") || r.Has("ip") {
+			continue // an exception, not the fallthrough
+		}
+		found = true
+		if tag, _ := r.GetString("balancerTag"); tag != "tunnel" {
+			t.Errorf("the profile's fallthrough is %v, so it would not fail over", r.Keys())
+		}
+	}
+	if !found {
+		t.Fatal("the profile has no fallthrough rule at all")
+	}
+}
+
+// Without a fallback there is no balancer, and the rules must name the outbound
+// directly — a balancerTag pointing at nothing routes nowhere.
+func TestWithoutAFallbackRulesNameTheOutbound(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := loadFixture(t, "profiles")
+	if cfg.Fallback != nil {
+		t.Skip("this fixture configures a fallback")
+	}
+
+	rs := rules(t, decodeRendered(t, cfg))
+	sawProxy := false
+	for i, r := range rs {
+		if r.Has("balancerTag") {
+			t.Errorf("rule %d uses a balancer, but none is declared: %v", i, r.Keys())
+		}
+		if tag, _ := r.GetString("outboundTag"); tag == "proxy" {
+			sawProxy = true
+		}
+	}
+	if !sawProxy {
+		t.Error("no rule targets the proxy outbound at all")
+	}
+}
+
+// configWithFallbackAndProfile builds the combination the fixtures do not
+// cover: a fallback and a profile that inherits from proxy.
+func configWithFallbackAndProfile(t *testing.T) *config.Config {
+	t.Helper()
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "tests/fixtures/reality-fallback.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw) + `
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+
+  [[profile.route]]
+  via     = "direct"
+  domains = ["domain:corp.example"]
+
+[[client]]
+ip     = "192.168.1.70"
+name   = "laptop"
+policy = "work-laptop"
+`
+	path := filepath.Join(root, "tests", "fixtures",
+		".tmp-"+strings.ReplaceAll(t.Name(), "/", "-")+".toml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(path) })
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	return cfg
 }

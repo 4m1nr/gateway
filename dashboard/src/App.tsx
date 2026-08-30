@@ -124,7 +124,7 @@ export function App() {
             path="xray"
             element={
               <Suspense fallback={<div className="py-10 text-center"><Spinner className="text-muted" /></div>}>
-                <Xray />
+                <Xray onPending={() => setPending(true)} />
               </Suspense>
             }
           />

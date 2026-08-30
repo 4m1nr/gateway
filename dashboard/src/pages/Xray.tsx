@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import { Download, QrCode } from "lucide-react";
 import QRCode from "qrcode";
 import { api, ApiError, type Outbound } from "@/lib/api";
-import { Alert, Button, Empty, Input, Panel } from "@/components/ui";
+import { readConfig, section } from "@/lib/config";
+import { Alert, Badge, Button, Empty, Input, Panel, Select } from "@/components/ui";
+import { Field, Toggle } from "@/components/ListField";
+import { SaveBar } from "@/components/SaveBar";
 import { JsonEditor } from "@/components/JsonEditor";
 
 /**
@@ -14,11 +17,13 @@ import { JsonEditor } from "@/components/JsonEditor";
  * a pasted outbound safe to use here, and they are invisible in the file you
  * pasted.
  */
-export function Xray() {
+export function Xray({ onPending }: { onPending: () => void }) {
   const [outbounds, setOutbounds] = useState<Outbound[] | null>(null);
   const [generated, setGenerated] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"outbounds" | "generated" | "import">("outbounds");
+  const [tab, setTab] = useState<"outbounds" | "failover" | "generated" | "import">(
+    "outbounds",
+  );
   const [selected, setSelected] = useState(0);
 
   useEffect(() => {
@@ -46,6 +51,7 @@ export function Xray() {
 
   const tabs = [
     { id: "outbounds" as const, label: "Outbounds" },
+    { id: "failover" as const, label: "Failover" },
     { id: "generated" as const, label: "Generated config" },
     { id: "import" as const, label: "Import a link" },
   ];
@@ -86,6 +92,7 @@ export function Xray() {
       {tab === "outbounds" && (
         <OutboundView outbounds={outbounds} selected={selected} onSelect={setSelected} />
       )}
+      {tab === "failover" && <FailoverView onSaved={onPending} />}
       {tab === "generated" && <GeneratedView config={generated} />}
       {tab === "import" && <ImportView />}
     </div>
@@ -152,6 +159,191 @@ function OutboundView({
           validated with <span className="font-mono">xray -test</span> before
           anything is reloaded, so a rejected config never reaches the running
           service.
+        </p>
+      </Panel>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------- failover --
+
+interface FallbackSettings {
+  enabled?: boolean;
+  file?: string;
+  json?: string;
+  server_ip?: string;
+  [key: string]: unknown;
+}
+
+interface XraySettings {
+  fallback?: FallbackSettings;
+  [key: string]: unknown;
+}
+
+/**
+ * The second server, and what turning it on does to routing.
+ *
+ * Worth stating plainly in the panel: enabling this does not add a rule, it
+ * changes what every existing rule means. "Through the tunnel" stops being one
+ * server and becomes a balancer across two, chosen by observed latency — for
+ * profile devices as much as for everyone else.
+ */
+function FailoverView({ onSaved }: { onSaved: () => void }) {
+  const [xray, setXray] = useState<XraySettings | null>(null);
+  const [after, setAfter] = useState<number | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const res = await readConfig();
+      setXray(section<XraySettings>(res.config, "xray", {}));
+      setAfter(
+        section<{ fallback_after_fails?: number }>(res.config, "health", {})
+          .fallback_after_fails ?? 6,
+      );
+      setDirty(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  if (error) return <Alert tone="bad" title="Could not read the config">{error}</Alert>;
+  if (!xray) return <Empty>Loading…</Empty>;
+
+  const fb: FallbackSettings = xray.fallback ?? {};
+  // Which of the two mutually exclusive sources this fallback uses. A config
+  // that sets neither yet is treated as a file, because that is what `gw init`
+  // writes and what the example ships.
+  const source: "file" | "json" = fb.json ? "json" : "file";
+
+  // Patch inside [xray], never replace it: the section also holds the ports,
+  // the loop-guard mark and the main outbound, and none of those are on this
+  // page to be re-sent.
+  const patch = (next: Partial<FallbackSettings>) => {
+    setXray({ ...xray, fallback: { ...fb, ...next } });
+    setDirty(true);
+  };
+
+  // Exactly one of file/json may be set, and the loader rejects both — so
+  // switching source drops the other rather than leaving a stale value behind
+  // to fail validation on save.
+  const useSource = (next: "file" | "json") => {
+    if (next === source) return;
+    const { file: _file, json: _json, ...rest } = fb;
+    setXray({
+      ...xray,
+      fallback: next === "file" ? { ...rest, file: "" } : { ...rest, json: "" },
+    });
+    setDirty(true);
+  };
+
+  return (
+    <div className="space-y-4">
+      <Panel
+        title="Failover"
+        description="A second server. When it is enabled, Xray load-balances between the two by observed latency and drops a server that stops answering."
+        actions={
+          <Badge tone={fb.enabled ? "ok" : "muted"}>
+            {fb.enabled ? "enabled" : "off"}
+          </Badge>
+        }
+      >
+        <div className="space-y-4">
+          <Toggle
+            label="Use a fallback server"
+            hint={
+              <>
+                This changes what every rule that says "the tunnel" resolves to:
+                instead of the single <span className="font-mono">proxy</span>{" "}
+                outbound they all point at a balancer named{" "}
+                <span className="font-mono">tunnel</span> that selects between{" "}
+                <span className="font-mono">proxy</span> and{" "}
+                <span className="font-mono">fallback</span>. Profile devices are
+                included — a profile with{" "}
+                <span className="font-mono">base = "proxy"</span> fails over with
+                everything else rather than staying pinned to a dead server.
+              </>
+            }
+            checked={fb.enabled ?? false}
+            onChange={(enabled) => patch({ enabled })}
+          />
+
+          <Field
+            label="Where the outbound comes from"
+            hint="Exactly one of the two. The gateway refuses a config that sets both, because there would be no way to tell which one you meant."
+          >
+            <Select value={source} onChange={(e) => useSource(e.target.value as "file" | "json")}>
+              <option value="file">A file in outbounds/</option>
+              <option value="json">Inline JSON</option>
+            </Select>
+          </Field>
+
+          {source === "file" ? (
+            <Field
+              label="File"
+              hint="Relative to gateway.toml, so it survives the repo moving."
+            >
+              <Input
+                className="font-mono"
+                placeholder="outbounds/backup.json"
+                value={fb.file ?? ""}
+                onChange={(e) => patch({ file: e.target.value })}
+              />
+            </Field>
+          ) : (
+            <Field
+              label="Outbound"
+              hint="A complete Xray outbound object, used verbatim. The tag and sockopt.mark are added when it loads."
+            >
+              <JsonEditor
+                value={fb.json ?? ""}
+                height="320px"
+                onChange={(json) => patch({ json })}
+              />
+            </Field>
+          )}
+
+          <Field
+            label="Server IP"
+            hint="Optional. Pins the address so the fallback does not need DNS at boot — which matters most in exactly the situation it exists for."
+          >
+            <Input
+              className="font-mono"
+              placeholder="leave empty to resolve normally"
+              value={fb.server_ip ?? ""}
+              onChange={(e) => patch({ server_ip: e.target.value })}
+            />
+          </Field>
+
+          <SaveBar
+            section="xray"
+            value={xray}
+            dirty={dirty}
+            onSaved={() => {
+              onSaved();
+              void load();
+            }}
+          />
+        </div>
+      </Panel>
+
+      <Panel
+        title="When the gateway gives up on a server"
+        description="The health agent probes continuously and escalates in steps, so one timeout is never treated as an outage."
+      >
+        <p className="text-xs leading-relaxed text-muted">
+          After <span className="font-mono">{after ?? 6}</span> consecutive failed
+          probes the health agent switches the balancer to the fallback; before
+          that it retries and restarts Xray. Xray's own latency-based selection
+          works continuously and does not wait for that count — this is the
+          backstop for a server that answers but carries no traffic. The count
+          lives in <span className="font-mono">[health]</span> on the Settings
+          page.
         </p>
       </Panel>
     </div>

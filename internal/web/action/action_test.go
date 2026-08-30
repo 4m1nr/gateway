@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/am1nr/gateway/internal/config"
 )
 
 const baseConfig = `
@@ -329,4 +331,47 @@ func TestRunHandlesHostileInput(t *testing.T) {
 func writeTestPassword(path, password string) error {
 	// Uses the same code path `gw web-passwd` does.
 	return SetPassword(path, password)
+}
+
+// The failover panel saves the whole [xray] section with its fallback patched
+// in, which is the only way a section-at-a-time writer can edit a sub-table.
+// The risk is the rest of [xray] — the ports, the loop-guard mark, the main
+// outbound — being dropped on the way through.
+func TestEnablingFailoverKeepsTheRestOfXray(t *testing.T) {
+	h := newHandler(t)
+	if err := os.WriteFile(filepath.Join(h.Repo, "outbounds", "backup.json"),
+		[]byte(outboundJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"outbound_mark": 255,
+		"outbound":      map[string]any{"file": "outbounds/main.json"},
+		"fallback": map[string]any{
+			"enabled": true,
+			"file":    "outbounds/backup.json",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := h.Handle(Request{Action: "config_write", Section: "xray", JSON: string(body)})
+	if !resp.OK {
+		t.Fatalf("saving the section was refused: %s", resp.Error)
+	}
+
+	cfg, err := config.Load(h.Config)
+	if err != nil {
+		t.Fatalf("the saved config does not load: %v", err)
+	}
+	if cfg.Fallback == nil {
+		t.Error("failover was enabled but no fallback outbound was loaded")
+	}
+	if cfg.Server == nil {
+		t.Error("the main outbound was lost while enabling failover")
+	}
+	if cfg.OutboundMark != 255 {
+		t.Errorf("the loop-guard mark became %d", cfg.OutboundMark)
+	}
 }

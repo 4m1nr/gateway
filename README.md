@@ -469,6 +469,32 @@ works — VLESS/XHTTP, Reality, Trojan, Shadowsocks, a chained outbound — with
 this repo needing to learn about it. `gw init` still writes the file for you
 from a `vless://` share link.
 
+### Failover changes what "the tunnel" means
+
+Enabling `[xray.fallback]` does not add a routing rule. It changes what every
+existing rule resolves to: instead of naming the single `proxy` outbound, each
+one points at a balancer called `tunnel` that selects between `proxy` and
+`fallback` by observed latency.
+
+```toml
+[xray.fallback]
+enabled = true
+file    = "outbounds/backup.json"
+```
+
+That applies to **every** rule that means the tunnel, not just the catch-all —
+a profile whose `base = "proxy"`, a `[[profile.route]]` with `via = "proxy"`,
+and a custom `[[route]]` naming `outboundTag = "proxy"` all move to the
+balancer too. Otherwise the device with a profile would be the one device that
+kept using a dead server while everything else failed over, which is the exact
+opposite of what a profile is for.
+
+Xray's own selection is continuous and does not wait for the health agent.
+`health.fallback_after_fails` is the backstop for the other failure: a server
+that still answers probes but carries no traffic.
+
+Both panels live under **Xray → Failover** in the dashboard.
+
 Two fields are always overridden, because the gateway depends on them and
 nobody writing an outbound by hand would include them:
 

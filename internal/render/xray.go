@@ -232,13 +232,44 @@ func directSockopt(c *config.Config) *jsonx.Object {
 
 // ----------------------------------------------------------------- routing --
 
+// tunnelTarget points a rule at the tunnel.
+//
+// "proxy" names the primary outbound, but what a rule usually MEANS by it is
+// "through the tunnel" — and with a fallback configured the tunnel is the
+// balancer, which picks between the two by observed latency. Pinning such a
+// rule to the primary outbound means it alone keeps using a dead server while
+// everything else fails over: a profile client would lose connectivity at
+// exactly the moment the failover existed to prevent that.
+//
+// So every rule that says "proxy" is sent to the balancer when there is one.
+// The balancer's own selector still names the outbounds, which is what makes
+// them reachable at all.
+func tunnelTarget(c *config.Config, rule *jsonx.Object, tag string) *jsonx.Object {
+	if c.Fallback == nil || tag != "proxy" {
+		rule.Set("outboundTag", tag)
+		return rule
+	}
+	rule.Set("balancerTag", "tunnel")
+	return rule
+}
+
 func xrayRouting(c *config.Config) *jsonx.Object {
 	custom := func(position string) []any {
 		var out []any
 		for _, r := range c.Routes {
-			if r.Position == position {
-				out = append(out, r.Rule)
+			if r.Position != position {
+				continue
 			}
+			// A custom rule saying "proxy" means the tunnel too, and a fallback
+			// that only covered generated rules would be a surprising kind of
+			// half-measure.
+			if c.Fallback != nil {
+				if target, ok := r.Rule.GetString("outboundTag"); ok && target == "proxy" {
+					r.Rule.Delete("outboundTag")
+					r.Rule.Set("balancerTag", "tunnel")
+				}
+			}
+			out = append(out, r.Rule)
 		}
 		return out
 	}
@@ -286,14 +317,14 @@ func xrayRouting(c *config.Config) *jsonx.Object {
 		}
 		for _, route := range p.Routes {
 			if len(route.Domains) > 0 {
-				rules = append(rules, obj("type", "field",
+				rules = append(rules, tunnelTarget(c, obj("type", "field",
 					"source", strs(sources),
-					"domain", strs(route.Domains), "outboundTag", route.Tag))
+					"domain", strs(route.Domains)), route.Tag))
 			}
 			if len(route.IPs) > 0 {
-				rules = append(rules, obj("type", "field",
+				rules = append(rules, tunnelTarget(c, obj("type", "field",
 					"source", strs(sources),
-					"ip", strs(route.IPs), "outboundTag", route.Tag))
+					"ip", strs(route.IPs)), route.Tag))
 			}
 		}
 	}
@@ -320,8 +351,8 @@ func xrayRouting(c *config.Config) *jsonx.Object {
 	// claim.
 	for _, p := range c.Profiles {
 		if sources := c.ProfileSources(p.Name); len(sources) > 0 {
-			rules = append(rules, obj("type", "field",
-				"source", strs(sources), "outboundTag", p.Base))
+			rules = append(rules, tunnelTarget(c, obj("type", "field",
+				"source", strs(sources)), p.Base))
 		}
 	}
 
