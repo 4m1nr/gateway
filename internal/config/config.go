@@ -294,34 +294,109 @@ func (c *Config) parseRouting(raw map[string]any) error {
 func (c *Config) parseGeodata(raw map[string]any) error {
 	geo := table(raw, "geodata")
 
-	// Release-asset discovery: every *.dat in the latest release is pulled, so
-	// a new rule file appearing upstream arrives on its own.
-	c.GeoRepo = strings.Trim(str(geo, "repo", "Chocolate4U/Iran-v2ray-rules"), "/")
-	if c.GeoRepo != "" && strings.Count(c.GeoRepo, "/") != 1 {
-		return errf("geodata.repo %q must be owner/name, e.g. "+
-			"'Chocolate4U/Iran-v2ray-rules'", c.GeoRepo)
-	}
-	c.GeoURL = str(geo, "url_template",
-		"https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat")
-	if !strings.Contains(c.GeoURL, "{0}") {
-		return errf("geodata.url_template must contain {0}, which is replaced with " +
-			"each file name (geoip, geosite)")
-	}
-	// Empty means "whatever the release ships". Naming files here pins the set
-	// and uses url_template instead of discovery.
 	var err error
-	if c.GeoFiles, err = stringList(geo, "files", nil); err != nil {
-		return err
-	}
-	if len(c.GeoFiles) == 0 && c.GeoRepo == "" {
-		return errf("geodata needs either `repo` (download every .dat in the latest " +
-			"release) or a non-empty `files` list to use with url_template")
-	}
 	// A truncated .dat takes the tunnel down, and this runs unattended.
 	if c.GeoMinBytes, err = integer(geo, "min_bytes", 102400); err != nil {
 		return err
 	}
+
+	sources, err := tables(geo, "source")
+	if err != nil {
+		return err
+	}
+
+	for i, raw := range sources {
+		where := fmt.Sprintf("geodata.source[%d]", i)
+		source, err := parseGeoSource(raw, where)
+		if err != nil {
+			return err
+		}
+		c.GeoSources = append(c.GeoSources, source)
+	}
+
+	// A config written before multiple sources existed sets repo, files and
+	// url_template directly on [geodata]. Those keep working as a single
+	// source: an existing gateway must not need its config edited to keep
+	// updating its routing data.
+	if len(c.GeoSources) == 0 {
+		legacy, err := parseGeoSource(geo, "geodata")
+		if err != nil {
+			return err
+		}
+		c.GeoSources = []GeoSource{legacy}
+	}
+
+	enabled := 0
+	for _, s := range c.GeoSources {
+		if s.Enabled {
+			enabled++
+		}
+	}
+	if enabled == 0 {
+		return errf("every geodata source is disabled, so nothing would keep the " +
+			"routing data current. Enable one, or remove them all to use the default.")
+	}
 	return nil
+}
+
+// defaultGeoRepo is where routing data comes from unless told otherwise.
+const defaultGeoRepo = "Chocolate4U/Iran-v2ray-rules"
+
+// defaultGeoURL is the template used when files are pinned and no other is set.
+const defaultGeoURL = "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat"
+
+// parseGeoSource reads one source, from either [[geodata.source]] or the
+// flat [geodata] form.
+func parseGeoSource(raw map[string]any, where string) (GeoSource, error) {
+	var s GeoSource
+	var err error
+
+	s.Repo = strings.Trim(str(raw, "repo", ""), "/")
+	// Only the flat legacy form gets the default repo. A [[geodata.source]]
+	// that names neither a repo nor a template is a mistake, and silently
+	// substituting somebody else's rules for it would be a bad way to find out.
+	if where == "geodata" && s.Repo == "" && raw["repo"] == nil {
+		s.Repo = defaultGeoRepo
+	}
+	if s.Repo != "" && strings.Count(s.Repo, "/") != 1 {
+		return s, errf("%s.repo %q must be owner/name, e.g. %q", where, s.Repo, defaultGeoRepo)
+	}
+
+	s.URLTemplate = str(raw, "url_template", "")
+	if s.URLTemplate == "" && where == "geodata" {
+		s.URLTemplate = defaultGeoURL
+	}
+	if s.URLTemplate != "" && !strings.Contains(s.URLTemplate, "{0}") {
+		return s, errf("%s.url_template must contain {0}, which is replaced with "+
+			"each file name (geoip, geosite)", where)
+	}
+
+	if s.Files, err = stringList(raw, "files", nil); err != nil {
+		return s, err
+	}
+	if s.Enabled, err = boolean(raw, "enabled", true); err != nil {
+		return s, err
+	}
+
+	// Release discovery needs a repo; a pinned set needs somewhere to fetch
+	// from. One of the two has to be true.
+	switch {
+	case len(s.Files) == 0 && s.Repo == "":
+		return s, errf("%s needs either `repo` (download every .dat in the latest "+
+			"release) or a non-empty `files` list to use with url_template", where)
+	case len(s.Files) > 0 && s.URLTemplate == "" && s.Repo == "":
+		return s, errf("%s pins `files` but has no url_template or repo to fetch "+
+			"them from", where)
+	}
+
+	s.Name = str(raw, "name", "")
+	if s.Name == "" {
+		s.Name = s.Repo
+	}
+	if s.Name == "" {
+		s.Name = s.URLTemplate
+	}
+	return s, nil
 }
 
 // ------------------------------------------------------- bootstrap proxy --

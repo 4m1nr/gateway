@@ -17,22 +17,40 @@ import (
 	"github.com/am1nr/gateway/internal/diag"
 )
 
-// hoistFlags moves flag arguments ahead of positional ones.
+// parseFlags parses a flag set that allows flags and positional arguments in
+// any order, and returns the positional ones.
 //
-// Go's flag package stops parsing at the first non-flag argument, so
-// `gw history 48 --json` would treat --json as a positional and fail with a
-// usage error that says nothing about why. These commands take positional
-// arguments in any order already; the flags should behave the same way.
-func hoistFlags(args []string) []string {
-	var flags, positional []string
-	for _, a := range args {
-		if len(a) > 1 && a[0] == '-' {
-			flags = append(flags, a)
-			continue
+// Go's flag package stops at the first non-flag argument, so `gw history 48
+// --json` would treat --json as a positional and fail with a usage error that
+// says nothing about why. Reordering the arguments first looks simpler and is
+// wrong: it separates `--config` from the path that follows it, which is how
+// `gw agent geoupdate --config x --check` came to report the config as
+// missing. Parsing repeatedly is what handles a flag's value correctly, because
+// the flag set is the only thing that knows which flags take one.
+func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
 		}
-		positional = append(positional, a)
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return positional, nil
+		}
+		// Everything up to the next flag is positional; resume parsing there.
+		next := len(rest)
+		for i, a := range rest {
+			if len(a) > 1 && a[0] == '-' {
+				next = i
+				break
+			}
+		}
+		positional = append(positional, rest[:next]...)
+		if next == len(rest) {
+			return positional, nil
+		}
+		args = rest[next:]
 	}
-	return append(flags, positional...)
 }
 
 // ------------------------------------------------------------------ diag ----
@@ -41,12 +59,13 @@ func cmdDiag(args []string) error {
 	cli.NeedRoot("diag")
 	fs := flag.NewFlagSet("diag", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "emit the report as JSON")
-	if err := fs.Parse(hoistFlags(args)); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return err
 	}
 	client := ""
-	if fs.NArg() > 0 {
-		client = fs.Arg(0)
+	if len(rest) > 0 {
+		client = rest[0]
 	}
 
 	d, err := diag.Collector{}.CollectDiag(client)
@@ -228,12 +247,13 @@ func cmdTrace(args []string) error {
 func cmdHistory(args []string) error {
 	fs := flag.NewFlagSet("history", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "emit the report as JSON")
-	if err := fs.Parse(hoistFlags(args)); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return err
 	}
 
 	hours, client := 48, ""
-	for _, arg := range fs.Args() {
+	for _, arg := range rest {
 		if _, err := netip.ParseAddr(arg); err == nil {
 			client = arg
 			continue
@@ -399,12 +419,13 @@ func cmdBench(args []string) error {
 	cli.NeedRoot("bench")
 	fs := flag.NewFlagSet("bench", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "emit the result as JSON")
-	if err := fs.Parse(hoistFlags(args)); err != nil {
+	rest, err := parseFlags(fs, args)
+	if err != nil {
 		return err
 	}
 	url := ""
-	if fs.NArg() > 0 {
-		url = fs.Arg(0)
+	if len(rest) > 0 {
+		url = rest[0]
 	}
 
 	fmt.Printf("%s\n", cli.Green("== link =="))

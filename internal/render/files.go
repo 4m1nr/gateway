@@ -232,9 +232,9 @@ func Env(c *config.Config, repo string) (string, error) {
 		// Only used by jobs that need the internet before the tunnel exists;
 		// unused once the gateway carries its own traffic.
 		{"BOOTSTRAP_PROXY", c.BootstrapProxy},
-		{"GEO_REPO", c.GeoRepo},
-		{"GEO_URL_TEMPLATE", c.GeoURL},
-		{"GEO_FILES", strings.Join(c.GeoFiles, " ")},
+		// Geodata settings are no longer exported: `gw agent geoupdate` reads
+		// the config directly, and there can be several sources now, which a
+		// flat KEY=value file cannot express without lying about it.
 		{"GEO_MIN_BYTES", strconv.Itoa(c.GeoMinBytes)},
 		{"WAN_IF", c.WANIf},
 		{"LAN_CIDR", c.LANCidr},

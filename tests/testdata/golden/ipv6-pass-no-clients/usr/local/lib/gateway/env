@@ -2,9 +2,6 @@
 # Values are quoted; source this file, do not grep it.
 REPO="@REPO@"
 BOOTSTRAP_PROXY=""
-GEO_REPO="Chocolate4U/Iran-v2ray-rules"
-GEO_URL_TEMPLATE="https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat"
-GEO_FILES=""
 GEO_MIN_BYTES="102400"
 WAN_IF="eth0"
 LAN_CIDR="192.168.1.0/24"

@@ -20,7 +20,6 @@ bootstrap-proxy	644	tailscale-args
 bootstrap-proxy	644	usr/local/etc/xray/config.json
 bootstrap-proxy	755	usr/local/lib/gateway/adguard-update.sh
 bootstrap-proxy	644	usr/local/lib/gateway/env
-bootstrap-proxy	755	usr/local/lib/gateway/geoupdate.sh
 bootstrap-proxy	755	usr/local/lib/gateway/health.sh
 bootstrap-proxy	755	usr/local/lib/gateway/ip-rules.sh
 bootstrap-proxy	644	usr/local/lib/gateway/net.sh
@@ -48,7 +47,6 @@ custom-routes	644	tailscale-args
 custom-routes	644	usr/local/etc/xray/config.json
 custom-routes	755	usr/local/lib/gateway/adguard-update.sh
 custom-routes	644	usr/local/lib/gateway/env
-custom-routes	755	usr/local/lib/gateway/geoupdate.sh
 custom-routes	755	usr/local/lib/gateway/health.sh
 custom-routes	755	usr/local/lib/gateway/ip-rules.sh
 custom-routes	644	usr/local/lib/gateway/net.sh
@@ -76,7 +74,6 @@ default	644	tailscale-args
 default	644	usr/local/etc/xray/config.json
 default	755	usr/local/lib/gateway/adguard-update.sh
 default	644	usr/local/lib/gateway/env
-default	755	usr/local/lib/gateway/geoupdate.sh
 default	755	usr/local/lib/gateway/health.sh
 default	755	usr/local/lib/gateway/ip-rules.sh
 default	644	usr/local/lib/gateway/net.sh
@@ -104,7 +101,6 @@ default-policy-block	644	tailscale-args
 default-policy-block	644	usr/local/etc/xray/config.json
 default-policy-block	755	usr/local/lib/gateway/adguard-update.sh
 default-policy-block	644	usr/local/lib/gateway/env
-default-policy-block	755	usr/local/lib/gateway/geoupdate.sh
 default-policy-block	755	usr/local/lib/gateway/health.sh
 default-policy-block	755	usr/local/lib/gateway/ip-rules.sh
 default-policy-block	644	usr/local/lib/gateway/net.sh
@@ -132,7 +128,6 @@ default-policy-direct	644	tailscale-args
 default-policy-direct	644	usr/local/etc/xray/config.json
 default-policy-direct	755	usr/local/lib/gateway/adguard-update.sh
 default-policy-direct	644	usr/local/lib/gateway/env
-default-policy-direct	755	usr/local/lib/gateway/geoupdate.sh
 default-policy-direct	755	usr/local/lib/gateway/health.sh
 default-policy-direct	755	usr/local/lib/gateway/ip-rules.sh
 default-policy-direct	644	usr/local/lib/gateway/net.sh
@@ -160,7 +155,6 @@ exit-node-direct	644	tailscale-args
 exit-node-direct	644	usr/local/etc/xray/config.json
 exit-node-direct	755	usr/local/lib/gateway/adguard-update.sh
 exit-node-direct	644	usr/local/lib/gateway/env
-exit-node-direct	755	usr/local/lib/gateway/geoupdate.sh
 exit-node-direct	755	usr/local/lib/gateway/health.sh
 exit-node-direct	755	usr/local/lib/gateway/ip-rules.sh
 exit-node-direct	644	usr/local/lib/gateway/net.sh
@@ -188,7 +182,6 @@ exit-node-profile	644	tailscale-args
 exit-node-profile	644	usr/local/etc/xray/config.json
 exit-node-profile	755	usr/local/lib/gateway/adguard-update.sh
 exit-node-profile	644	usr/local/lib/gateway/env
-exit-node-profile	755	usr/local/lib/gateway/geoupdate.sh
 exit-node-profile	755	usr/local/lib/gateway/health.sh
 exit-node-profile	755	usr/local/lib/gateway/ip-rules.sh
 exit-node-profile	644	usr/local/lib/gateway/net.sh
@@ -218,7 +211,6 @@ ipv6-pass-no-clients	644	tailscale-args
 ipv6-pass-no-clients	644	usr/local/etc/xray/config.json
 ipv6-pass-no-clients	755	usr/local/lib/gateway/adguard-update.sh
 ipv6-pass-no-clients	644	usr/local/lib/gateway/env
-ipv6-pass-no-clients	755	usr/local/lib/gateway/geoupdate.sh
 ipv6-pass-no-clients	755	usr/local/lib/gateway/health.sh
 ipv6-pass-no-clients	755	usr/local/lib/gateway/ip-rules.sh
 ipv6-pass-no-clients	644	usr/local/lib/gateway/net.sh
@@ -246,7 +238,6 @@ jobs	644	tailscale-args
 jobs	644	usr/local/etc/xray/config.json
 jobs	755	usr/local/lib/gateway/adguard-update.sh
 jobs	644	usr/local/lib/gateway/env
-jobs	755	usr/local/lib/gateway/geoupdate.sh
 jobs	755	usr/local/lib/gateway/health.sh
 jobs	755	usr/local/lib/gateway/ip-rules.sh
 jobs	700	usr/local/lib/gateway/jobs/backup-config.sh
@@ -277,7 +268,6 @@ no-tailscale	644	tailscale-args
 no-tailscale	644	usr/local/etc/xray/config.json
 no-tailscale	755	usr/local/lib/gateway/adguard-update.sh
 no-tailscale	644	usr/local/lib/gateway/env
-no-tailscale	755	usr/local/lib/gateway/geoupdate.sh
 no-tailscale	755	usr/local/lib/gateway/health.sh
 no-tailscale	755	usr/local/lib/gateway/ip-rules.sh
 no-tailscale	644	usr/local/lib/gateway/net.sh
@@ -302,7 +292,6 @@ no-web	644	tailscale-args
 no-web	644	usr/local/etc/xray/config.json
 no-web	755	usr/local/lib/gateway/adguard-update.sh
 no-web	644	usr/local/lib/gateway/env
-no-web	755	usr/local/lib/gateway/geoupdate.sh
 no-web	755	usr/local/lib/gateway/health.sh
 no-web	755	usr/local/lib/gateway/ip-rules.sh
 no-web	644	usr/local/lib/gateway/net.sh
@@ -330,7 +319,6 @@ profiles	644	tailscale-args
 profiles	644	usr/local/etc/xray/config.json
 profiles	755	usr/local/lib/gateway/adguard-update.sh
 profiles	644	usr/local/lib/gateway/env
-profiles	755	usr/local/lib/gateway/geoupdate.sh
 profiles	755	usr/local/lib/gateway/health.sh
 profiles	755	usr/local/lib/gateway/ip-rules.sh
 profiles	644	usr/local/lib/gateway/net.sh
@@ -358,7 +346,6 @@ reality-fallback	644	tailscale-args
 reality-fallback	644	usr/local/etc/xray/config.json
 reality-fallback	755	usr/local/lib/gateway/adguard-update.sh
 reality-fallback	644	usr/local/lib/gateway/env
-reality-fallback	755	usr/local/lib/gateway/geoupdate.sh
 reality-fallback	755	usr/local/lib/gateway/health.sh
 reality-fallback	755	usr/local/lib/gateway/ip-rules.sh
 reality-fallback	644	usr/local/lib/gateway/net.sh
@@ -386,7 +373,6 @@ trojan-upstream	644	tailscale-args
 trojan-upstream	644	usr/local/etc/xray/config.json
 trojan-upstream	755	usr/local/lib/gateway/adguard-update.sh
 trojan-upstream	644	usr/local/lib/gateway/env
-trojan-upstream	755	usr/local/lib/gateway/geoupdate.sh
 trojan-upstream	755	usr/local/lib/gateway/health.sh
 trojan-upstream	755	usr/local/lib/gateway/ip-rules.sh
 trojan-upstream	644	usr/local/lib/gateway/net.sh

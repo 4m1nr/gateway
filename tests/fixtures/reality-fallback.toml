@@ -194,23 +194,39 @@ extra_local_networks = []
 #  the current files, with rollback if that fails.
 # ============================================================================
 [geodata]
-# Every *.dat asset in this repo's latest release is downloaded, so a new rule
-# file appearing upstream arrives on its own. The installed release tag is
-# recorded, so the daily timer is a cheap no-op until upstream publishes.
-repo = "Chocolate4U/Iran-v2ray-rules"
-
-# Naming files here pins the set instead: they are fetched via url_template
-# ({0} is replaced with each name) and release discovery is skipped.
-files = []
-url_template = "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat"
-
-# Floor for a downloaded file. Catches truncated transfers and HTML error
-# pages served with a 200, either of which would take the tunnel down.
+# A truncated .dat takes the tunnel down, and this runs unattended, so a file
+# smaller than this is refused rather than installed.
 min_bytes = 102400
 
-# ============================================================================
-#  DNS
-# ============================================================================
+# Where routing data comes from. Several sources can be listed; they are fetched
+# in order, and when two provide a file of the same name the FIRST wins — the
+# same way every other precedence here works. The updater reports which source
+# each file came from, and what it skipped.
+#
+# Each source is one of two shapes:
+#   repo, no files   every *.dat in the latest release, so a new rule file
+#                    appearing upstream arrives on its own
+#   files            exactly those names, fetched through url_template
+#
+# Each is tracked separately, so the daily timer only downloads from a source
+# that has actually published something.
+[[geodata.source]]
+name = "iran"
+repo = "Chocolate4U/Iran-v2ray-rules"
+
+# A second set, pinned to specific files:
+# [[geodata.source]]
+# name         = "loyalsoldier"
+# files        = ["geoip", "geosite"]
+# url_template = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/{0}.dat"
+
+# Kept but not fetched:
+# [[geodata.source]]
+# name    = "mirror"
+# enabled = false
+# files        = ["geoip", "geosite"]
+# url_template = "https://mirror.example.com/v2ray/{0}.dat"
+
 [dns]
 # LAN-facing resolver (AdGuard Home).
 adguard_port    = 53

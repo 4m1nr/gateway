@@ -17,7 +17,7 @@ func cmdCheck(args []string) error {
 	killswitch := fs.Bool("killswitch", false,
 		"also prove traffic dies rather than leaking (briefly cuts proxied clients off)")
 	asJSON := fs.Bool("json", false, "emit the report as JSON")
-	if err := fs.Parse(hoistFlags(args)); err != nil {
+	if _, err := parseFlags(fs, args); err != nil {
 		return err
 	}
 

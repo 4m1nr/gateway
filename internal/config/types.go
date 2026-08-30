@@ -27,6 +27,26 @@ var ReservedDst = []string{
 	TailnetV4,
 }
 
+// GeoSource is one place routing data comes from.
+//
+// Two shapes, as before: a GitHub repo whose latest release is scanned for
+// every .dat asset — so a new rule file appearing upstream arrives on its own —
+// or an explicit list of names fetched through a URL template.
+type GeoSource struct {
+	// Name labels the source in logs and in the dashboard. Defaults to the repo
+	// or the template's host.
+	Name string
+	// Repo is owner/name. Release discovery is used when Files is empty.
+	Repo string
+	// URLTemplate has {0} replaced by each file name.
+	URLTemplate string
+	// Files pins the set. Empty means "whatever the release ships", which
+	// requires Repo.
+	Files []string
+	// Enabled allows a source to be kept in the config but skipped.
+	Enabled bool
+}
+
 // Client is a per-address policy override.
 type Client struct {
 	IP     string
@@ -120,9 +140,11 @@ type Config struct {
 	DropPrivate     bool
 
 	// ---- geodata ----
-	GeoRepo     string
-	GeoURL      string
-	GeoFiles    []string
+	// GeoSources are the places routing data is fetched from, in order. When
+	// two provide a file of the same name the FIRST wins, matching how
+	// everything else here resolves — routing rules, policy precedence — and
+	// the updater reports which source each file came from.
+	GeoSources  []GeoSource
 	GeoMinBytes int
 
 	BootstrapProxy string

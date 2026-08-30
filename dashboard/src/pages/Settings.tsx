@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import type { ConfigDoc } from "@/lib/api";
+import type { ConfigDoc, GeoSource, GeodataSettings } from "@/lib/api";
 import { readConfig, section } from "@/lib/config";
-import { Alert, Empty, Input, Panel, Select } from "@/components/ui";
+import { Alert, Badge, Button, Empty, Input, Panel, Select } from "@/components/ui";
+import { Plus, Trash2 } from "lucide-react";
 import { Field, ListField, Toggle } from "@/components/ListField";
 import { SaveBar } from "@/components/SaveBar";
 import { AccessPanel } from "@/components/AccessPanel";
@@ -53,6 +54,7 @@ export function Settings({ onPending }: { onPending: () => void }) {
       <DashboardAccess doc={doc} lanCidr={status?.lan ?? ""} onSaved={saved} />
       <GeoSplit doc={doc} onSaved={saved} />
       <Tailscale doc={doc} onSaved={saved} />
+      <Geodata doc={doc} onSaved={saved} />
       <Health doc={doc} onSaved={saved} />
       <SystemPanel doc={doc} onSaved={saved} />
       <Performance doc={doc} onSaved={saved} />
@@ -240,6 +242,161 @@ function Tailscale({ doc, onSaved }: { doc: ConfigDoc; onSaved: () => void }) {
       </div>
       <div className="mt-4">
         <SaveBar section="tailscale" value={v} dirty={dirty} onSaved={() => { setDirty(false); onSaved(); }} />
+      </div>
+    </Panel>
+  );
+}
+
+// ---------------------------------------------------------------- geodata --
+
+/**
+ * Where routing data comes from.
+ *
+ * Several sources, fetched in order. When two provide a file of the same name
+ * the first wins — the same precedence as everything else here — and the
+ * updater reports which source each file came from.
+ */
+function Geodata({ doc, onSaved }: { doc: ConfigDoc; onSaved: () => void }) {
+  const [v, setV] = useState<GeodataSettings>(() => {
+    const stored = section<GeodataSettings>(doc, "geodata", {});
+    // A config written before multiple sources existed keeps its settings on
+    // [geodata] itself. Shown as the one source it is, so editing it here does
+    // not silently discard it.
+    if (!stored.source && (stored as Record<string, unknown>).repo) {
+      const legacy = stored as unknown as GeoSource;
+      return {
+        min_bytes: stored.min_bytes,
+        source: [{
+          name: legacy.repo || "default",
+          repo: legacy.repo,
+          url_template: legacy.url_template,
+          files: legacy.files,
+          enabled: true,
+        }],
+      };
+    }
+    return stored;
+  });
+  const [dirty, setDirty] = useState(false);
+
+  const sources = v.source ?? [];
+  const update = (next: GeoSource[]) => {
+    setV({ min_bytes: v.min_bytes, source: next });
+    setDirty(true);
+  };
+  const patch = (i: number, changes: Partial<GeoSource>) =>
+    update(sources.map((s, j) => (j === i ? { ...s, ...changes } : s)));
+
+  return (
+    <Panel
+      title="Routing data"
+      description="The geoip and geosite files Xray matches against. Each source is tracked separately, so the daily timer only downloads from one that has actually published."
+      actions={
+        <Button onClick={() => update([...sources, { name: "", repo: "", enabled: true }])}>
+          <Plus className="size-3.5" /> Add a source
+        </Button>
+      }
+    >
+      {sources.length === 0 ? (
+        <Empty>No sources — routing data will never update.</Empty>
+      ) : (
+        <div className="space-y-3">
+          {sources.map((source, i) => {
+            const pinned = (source.files ?? []).length > 0;
+            return (
+              <div key={i} className="rounded-lg border border-border p-3">
+                <div className="grid gap-3 sm:grid-cols-[1fr_2fr_auto_auto]">
+                  <Field label="Name" hint={i === 0 ? "wins any file-name clash" : undefined}>
+                    <Input
+                      className="font-mono"
+                      placeholder="iran"
+                      value={source.name ?? ""}
+                      onChange={(e) => patch(i, { name: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="GitHub repo" hint="owner/name — every .dat in its latest release">
+                    <Input
+                      className="font-mono"
+                      placeholder="Chocolate4U/Iran-v2ray-rules"
+                      value={source.repo ?? ""}
+                      onChange={(e) => patch(i, { repo: e.target.value })}
+                    />
+                  </Field>
+                  <div className="flex items-end pb-1.5">
+                    <Toggle
+                      label="On"
+                      checked={source.enabled !== false}
+                      onChange={(enabled) => patch(i, { enabled })}
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <Button variant="danger" onClick={() => update(sources.filter((_, j) => j !== i))}>
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <ListField
+                    label="Pinned files"
+                    hint="Leave empty to take every .dat the release ships, so a new rule file arrives on its own."
+                    rows={2}
+                    placeholder={"geoip\ngeosite"}
+                    value={source.files}
+                    onChange={(files) => patch(i, { files })}
+                  />
+                  <Field
+                    label="URL template"
+                    hint="Only used with pinned files. {0} is replaced by each name."
+                  >
+                    <Input
+                      className="font-mono"
+                      placeholder="https://mirror.example.com/v2ray/{0}.dat"
+                      value={source.url_template ?? ""}
+                      onChange={(e) => patch(i, { url_template: e.target.value })}
+                    />
+                  </Field>
+                </div>
+
+                <div className="mt-2">
+                  {source.enabled === false ? (
+                    <Badge tone="muted">kept, not fetched</Badge>
+                  ) : pinned ? (
+                    <Badge tone="accent">{(source.files ?? []).length} pinned file(s)</Badge>
+                  ) : (
+                    <Badge tone="ok">every .dat in the latest release</Badge>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <Field
+          label="Minimum file size, bytes"
+          hint="A truncated download and an error page served with a 200 both land far below a real rule file, and this runs unattended. Anything smaller is refused rather than installed."
+        >
+          <Input
+            type="number"
+            className="font-mono"
+            value={v.min_bytes ?? 102400}
+            onChange={(e) => { setV({ ...v, min_bytes: Number(e.target.value) }); setDirty(true); }}
+          />
+        </Field>
+      </div>
+
+      <div className="mt-4">
+        <SaveBar
+          section="geodata"
+          value={v}
+          dirty={dirty}
+          onSaved={() => { setDirty(false); onSaved(); }}
+        >
+          Run <span className="font-mono">update-geo</span> from the Console to fetch immediately;
+          otherwise the daily timer picks it up.
+        </SaveBar>
       </div>
     </Panel>
   );

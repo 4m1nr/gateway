@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,5 +55,56 @@ func TestEnsurePathHandlesAnEmptyPath(t *testing.T) {
 		if d == "" {
 			t.Errorf("PATH contains an empty entry, which means the cwd: %q", got)
 		}
+	}
+}
+
+// Flags and positional arguments must work in any order, and a flag's value
+// must stay attached to it. Reordering arguments to achieve the first breaks
+// the second — `--config path --check` became "the config `--check` is
+// missing", which is a confusing way to learn about an argument parser.
+func TestParseFlagsHandlesInterspersedArguments(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantConfig string
+		wantCheck  bool
+		wantRest   []string
+	}{
+		{"flags first", []string{"--config", "/tmp/a.toml", "--check"}, "/tmp/a.toml", true, nil},
+		{"flag after positional", []string{"48", "--check"}, "", true, []string{"48"}},
+		{"positional between flags", []string{"--check", "48", "--config", "/tmp/a.toml"},
+			"/tmp/a.toml", true, []string{"48"}},
+		{"equals form", []string{"--config=/tmp/a.toml", "1.2.3.4"}, "/tmp/a.toml", false, []string{"1.2.3.4"}},
+		{"only positional", []string{"192.168.1.5"}, "", false, []string{"192.168.1.5"}},
+		{"nothing", nil, "", false, nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("t", flag.ContinueOnError)
+			fs.SetOutput(io.Discard)
+			config := fs.String("config", "", "")
+			check := fs.Bool("check", false, "")
+
+			rest, err := parseFlags(fs, tc.args)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if *config != tc.wantConfig {
+				t.Errorf("config is %q, want %q", *config, tc.wantConfig)
+			}
+			if *check != tc.wantCheck {
+				t.Errorf("check is %v, want %v", *check, tc.wantCheck)
+			}
+			if len(rest) != len(tc.wantRest) {
+				t.Fatalf("positional args are %v, want %v", rest, tc.wantRest)
+			}
+			for i := range rest {
+				if rest[i] != tc.wantRest[i] {
+					t.Errorf("positional args are %v, want %v", rest, tc.wantRest)
+					break
+				}
+			}
+		})
 	}
 }

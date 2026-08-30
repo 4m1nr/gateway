@@ -141,6 +141,8 @@ func main() {
 		err = cmdPanic(rest)
 	case "init":
 		err = cmdInit(rest)
+	case "agent":
+		err = cmdAgent(rest)
 	case "check":
 		err = cmdCheck(rest)
 	case "version", "--version", "-v":

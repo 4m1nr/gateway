@@ -2,9 +2,6 @@
 # Values are quoted; source this file, do not grep it.
 REPO="@REPO@"
 BOOTSTRAP_PROXY="socks5h://127.0.0.1:1080"
-GEO_REPO=""
-GEO_URL_TEMPLATE="https://mirror.example.com/v2ray/{0}.dat"
-GEO_FILES="geoip geosite"
 GEO_MIN_BYTES="102400"
 WAN_IF="eth0"
 LAN_CIDR="192.168.1.0/24"

@@ -4,4 +4,4 @@ After=xray.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/lib/gateway/geoupdate.sh
+ExecStart=@REPO@/bin/gw agent geoupdate

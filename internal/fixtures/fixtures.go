@@ -71,13 +71,26 @@ file    = "outbounds/backup.json"`)
 		return b.sub(t, `file = "outbounds/main.json"`, `file = "outbounds/trojan.json"`)
 	})
 
+	// Exercises the bootstrap proxy and, at the same time, the other geodata
+	// shape: two sources, one pinned to specific files through a mirror.
 	b.derive("bootstrap-proxy", example, func(t string) string {
 		t = b.sub(t, `socks_proxy = ""`, `socks_proxy = "socks5h://127.0.0.1:1080"`)
-		t = b.sub(t, `repo = "Chocolate4U/Iran-v2ray-rules"`, `repo = ""`)
-		t = b.sub(t, "files = []", `files = ["geoip", "geosite"]`)
-		return b.sub(t,
-			`url_template = "https://github.com/Chocolate4U/Iran-v2ray-rules/releases/latest/download/{0}.dat"`,
-			`url_template = "https://mirror.example.com/v2ray/{0}.dat"`)
+		return b.sub(t, `[[geodata.source]]
+name = "iran"
+repo = "Chocolate4U/Iran-v2ray-rules"`, `[[geodata.source]]
+name = "iran"
+repo = "Chocolate4U/Iran-v2ray-rules"
+
+[[geodata.source]]
+name         = "mirror"
+files        = ["geoip", "geosite"]
+url_template = "https://mirror.example.com/v2ray/{0}.dat"
+
+[[geodata.source]]
+name    = "parked"
+enabled = false
+files        = ["geoip"]
+url_template = "https://parked.example.com/{0}.dat"`)
 	})
 
 	profiles := example + profilesSuffix

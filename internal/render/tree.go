@@ -101,7 +101,7 @@ func Build(c *config.Config, opt Options) ([]File, error) {
 	}
 	contents["usr/local/lib/gateway/env"] = env
 
-	for _, name := range []string{"ip-rules.sh", "health.sh", "geoupdate.sh",
+	for _, name := range []string{"ip-rules.sh", "health.sh",
 		"ts-bypass.sh", "net.sh", "xray-update.sh", "adguard-update.sh"} {
 		text, err := templateFile("lib/" + name)
 		if err != nil {

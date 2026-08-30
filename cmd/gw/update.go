@@ -51,10 +51,12 @@ func cmdUpdate(args []string) error {
 			return apt("-y", "install", "--only-upgrade", "tailscale")
 		})
 	case "geo", "geodata":
-		if version == "" {
-			return helper("geoupdate.sh")
+		// Go, not a helper script: geodata can have several sources now, which
+		// a flat env file cannot describe.
+		if version == "--force" || version == "force" {
+			return cmdGeoUpdate([]string{"--force"})
 		}
-		return helper("geoupdate.sh", version)
+		return cmdGeoUpdate(nil)
 	case "packages", "apt":
 		return withAptProxy(func() error {
 			if err := apt("update", "-qq"); err != nil {
@@ -102,7 +104,7 @@ func orLatest(v string) string {
 // aborting: one failing should not stop the others.
 func updateServices() {
 	cli.Info("updating geodata")
-	if err := helper("geoupdate.sh"); err != nil {
+	if err := cmdGeoUpdate(nil); err != nil {
 		cli.Warn("geodata update failed: %v", err)
 	}
 	cli.Info("updating Xray")
@@ -123,12 +125,15 @@ func updateCheck() error {
 	for _, c := range []struct{ label, script string }{
 		{"xray", "xray-update.sh"},
 		{"adguard", "adguard-update.sh"},
-		{"geodata", "geoupdate.sh"},
 	} {
 		fmt.Printf("%s\n", cli.Green("--- "+c.label+" ---"))
 		if err := helper(c.script, "--check"); err != nil {
 			cli.Warn("%v", err)
 		}
+	}
+	fmt.Printf("%s\n", cli.Green("--- geodata ---"))
+	if err := cmdGeoUpdate([]string{"--check"}); err != nil {
+		cli.Warn("%v", err)
 	}
 
 	fmt.Printf("%s\n", cli.Green("--- packages ---"))

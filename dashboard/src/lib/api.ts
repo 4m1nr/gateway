@@ -206,6 +206,19 @@ export interface DnsSettings {
   ui_allow_cidrs?: string[];
 }
 
+export interface GeoSource {
+  name?: string;
+  repo?: string;
+  url_template?: string;
+  files?: string[];
+  enabled?: boolean;
+}
+
+export interface GeodataSettings {
+  min_bytes?: number;
+  source?: GeoSource[];
+}
+
 export interface GwCommand {
   name: string;
   summary: string;

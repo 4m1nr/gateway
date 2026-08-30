@@ -62,8 +62,7 @@ NEXT
 fi
 
 info "merging gateway settings into AdGuard Home"
-python3 "$REPO/lib/agh_merge.py" /opt/AdGuardHome/AdGuardHome.yaml \
-  "$REPO/build/adguard-overrides.json"
+"$REPO/bin/gw" agent adguard-merge
 systemctl restart AdGuardHome
 sleep 2
 
