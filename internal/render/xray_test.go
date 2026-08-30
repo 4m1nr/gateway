@@ -843,3 +843,60 @@ func configWith(t *testing.T, body string) *config.Config {
 	}
 	return cfg
 }
+
+// The resolver is reached THROUGH the upstream, not from here.
+//
+// A DNS query leaving Xray's resolver carries the server's address as its
+// destination, not the name being looked up, so a rule matching on domain
+// never sees it. Without a rule on the address, the box asks a corporate
+// resolver over the main tunnel — from an address it does not serve, if it is
+// reachable at all — and the answer is the outside view or nothing.
+func TestUpstreamResolverIsQueriedThroughItsUpstream(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := configWith(t, upstreamFixture)
+	rs := rules(t, decodeRendered(t, cfg))
+
+	for _, r := range rs {
+		if !hasStringItem(r, "inboundTag", "dns-in") {
+			continue
+		}
+		if !hasStringItem(r, "ip", "172.30.0.53/32") {
+			continue
+		}
+		if tag, _ := r.GetString("outboundTag"); tag != "up-work" {
+			t.Errorf("the query to the work resolver goes to %q", tag)
+		}
+		return
+	}
+	t.Error("no rule routes traffic to the declared resolver, so the query " +
+		"leaves by the main tunnel instead of the upstream that can reach it")
+}
+
+// An upstream with no resolver declared adds no address rule — there is no
+// address to route, and a rule matching nothing would sit above every other.
+func TestNoResolverRuleWithoutADeclaredResolver(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := configWith(t, `
+[[upstream]]
+name = "home"
+json = """{"protocol":"freedom","settings":{}}"""
+
+[[profile]]
+name = "desk"
+base = "proxy"
+
+  [[profile.route]]
+  via     = "home"
+  domains = ["domain:nas.example"]
+
+[[client]]
+ip     = "192.168.1.73"
+name   = "desk"
+policy = "desk"
+`)
+	for _, r := range rules(t, decodeRendered(t, cfg)) {
+		if hasStringItem(r, "inboundTag", "dns-in") && r.Has("ip") {
+			t.Errorf("an address rule was emitted with no resolver declared: %v", r.Keys())
+		}
+	}
+}

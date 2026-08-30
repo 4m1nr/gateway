@@ -377,11 +377,27 @@ func xrayRouting(c *config.Config) *jsonx.Object {
 	// and the name is answered from the wrong side of the tunnel. For a network
 	// that answers its own names differently, which is most of them, that means
 	// the address is the outside view or nothing at all.
-	for _, domains := range dnsThroughUpstream(c) {
+	for _, group := range dnsThroughUpstream(c) {
+		// The resolver is reached THROUGH the upstream, not from here.
+		//
+		// This rule matches the query's destination, which is the only thing
+		// that actually routes it: a DNS query leaving the resolver carries the
+		// server's address, not the name being looked up, so a domain match
+		// never sees it. Without this the box asks a corporate resolver over
+		// the main tunnel -- from an address it does not serve, if it is
+		// reachable at all -- and the answer is the outside view or nothing.
+		if up := c.UpstreamByTag(group.tag); up != nil && up.DNS != "" {
+			rules = append(rules, obj("type", "field",
+				"inboundTag", arr(dnsTag),
+				"ip", arr(up.DNS+"/32"),
+				"outboundTag", group.tag))
+		}
+		// Kept as well: Xray matches sniffed names on some paths, and a DoH
+		// resolver is a name rather than an address.
 		rules = append(rules, obj("type", "field",
 			"inboundTag", arr(dnsTag),
-			"domain", strs(domains.domains),
-			"outboundTag", domains.tag))
+			"domain", strs(group.domains),
+			"outboundTag", group.tag))
 	}
 
 	// position = "first": ahead of even the per-client policy rules. This is
