@@ -10,6 +10,7 @@ while [ -L "$_self" ]; do
 done
 source "$(dirname "$_self")/../lib/common.sh"
 need_root
+require_config
 
 info "hardening sshd"
 install -d /etc/ssh/sshd_config.d

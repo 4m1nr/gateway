@@ -115,7 +115,8 @@ jobs:
           # nftables: the suite feeds every generated ruleset to a real `nft -c`
           # sudo:     provides visudo, which validates the dashboard's sudoers file
           # jq:       validates the committed example outbounds
-          sudo apt-get install -y --no-install-recommends nftables sudo jq
+          # zip:      the updater tests build release archives to install from
+          sudo apt-get install -y --no-install-recommends nftables sudo jq zip
 
       - name: Show versions
         run: |

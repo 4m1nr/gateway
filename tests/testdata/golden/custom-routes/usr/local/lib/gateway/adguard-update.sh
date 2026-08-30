@@ -12,10 +12,15 @@
 # not be "SSH in and figure out what happened" either.
 set -euo pipefail
 
-. /usr/local/lib/gateway/env
-. /usr/local/lib/gateway/net.sh
+GW_LIB="${GW_LIB:-/usr/local/lib/gateway}"
+. "$GW_LIB/env"
+. "$GW_LIB/net.sh"
 
-DIR=/opt/AdGuardHome
+# Overridable so the update path can be exercised against a scratch tree rather
+# than the live system. The default is the same location it always was; the
+# download-verify-test-rollback sequence is the part most worth being able to
+# test, and it cannot be tested at a hardcoded absolute path.
+DIR="${GW_ADGUARD_DIR:-/opt/AdGuardHome}"
 BIN="$DIR/AdGuardHome"
 CONF="$DIR/AdGuardHome.yaml"
 REPO_URL=https://github.com/AdguardTeam/AdGuardHome

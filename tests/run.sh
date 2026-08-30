@@ -302,6 +302,21 @@ else
   bad "Python has come back: $stray"
 fi
 
+
+# The focused suites. Each runs the real script against a scratch tree rather
+# than grepping it, so they are kept separate — a grep and a behavioural test
+# reading the same file would look like two checks and be one.
+for suite in tests/proxy_test.sh tests/update_test.sh tests/deps_test.sh; do
+  echo
+  echo "== $(basename "$suite" .sh) =="
+  if out=$(bash "$suite" 2>&1); then
+    ok "$(printf '%s' "$out" | tail -1)"
+  else
+    bad "$(basename "$suite") failed:"
+    printf '%s\n' "$out" | grep -E '\xe2\x9c\x97|failed$' | sed 's/^/      /'
+  fi
+done
+
 echo
 printf '%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

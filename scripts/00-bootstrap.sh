@@ -16,8 +16,17 @@ need_root
 
 info "installing packages"
 export DEBIAN_FRONTEND=noninteractive
-# This box has no tunnel yet. If it also has no usable direct route, set
-# bootstrap.socks_proxy in gateway.toml (or pass `gw --proxy ...`).
+# This box has no tunnel yet, and no gateway.toml either — that file is written
+# by `gw init`, which needs the binary this script is about to build. So the
+# only way to fetch through a proxy at this point is the environment:
+#
+#   sudo GW_PROXY=socks5h://127.0.0.1:1080 scripts/00-bootstrap.sh
+#
+# Every later script reads bootstrap.socks_proxy from the config as usual.
+if [ -z "${GW_PROXY:-}" ] && [ ! -f "$CONFIG" ]; then
+  info "no proxy set and no config yet — fetching directly"
+  info "if this box has no direct route, re-run with GW_PROXY=socks5h://host:port"
+fi
 apt_proxy_on
 apt-get update -qq
 # golang-go builds `gw`, which is now the whole gateway: no Python, no YAML
@@ -50,6 +59,27 @@ info "built $REPO/bin/gw"
 # git pull, so the box keeps running old code while the checkout says
 # otherwise, and every fix you pull appears to have done nothing.
 ln -sfn "$REPO/bin/gw" /usr/local/bin/gw
+
+# Everything above needs no config; everything below is driven by one.
+#
+# That split is forced: the static IP, the interface name and the router
+# address all come from gateway.toml, which `gw init` writes — and gw init
+# needs the binary this script has just built. So the first run stops here and
+# the second does the rest. Both runs are idempotent, so re-running is the
+# normal path rather than a recovery.
+if [ ! -f "$CONFIG" ]; then
+  info "packages installed and gw built"
+  cat <<NEXT
+
+Next:
+  gw init                        # writes $CONFIG; paste your share link
+  sudo scripts/00-bootstrap.sh   # re-run: static IP, clock, logging
+
+The network setup below needs net.wan_if, net.static_ip and net.router, which
+gw init is what writes.
+NEXT
+  exit 0
+fi
 
 # Installing the nftables package can enable nftables.service, which loads
 # /etc/nftables.conf starting with `flush ruleset`. That would erase the

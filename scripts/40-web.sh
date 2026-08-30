@@ -15,6 +15,7 @@ while [ -L "$_self" ]; do
 done
 source "$(dirname "$_self")/../lib/common.sh"
 need_root
+require_config
 
 grep -q '^enabled = true' <(sed -n '/^\[web\]/,/^\[/p' "$CONFIG") \
   || die "web.enabled is false in $CONFIG — nothing to install"

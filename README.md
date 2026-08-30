@@ -24,9 +24,10 @@ configs on the box — you edit that file and run `gw apply`.
 
 ```bash
 git clone <this repo> /opt/gateway && cd /opt/gateway
-sudo scripts/00-bootstrap.sh # installs Go, builds bin/gw, base system, static IP
+sudo scripts/00-bootstrap.sh # installs Go, builds bin/gw — then stops
 
-gw init                      # interview; paste your vless:// share link
+gw init                      # interview; paste your share link
+sudo scripts/00-bootstrap.sh # re-run: static IP, clock, logging
 gw client add 192.168.1.50 laptop proxy
 sudo scripts/10-xray.sh      # tunnel, verified over SOCKS before anything is intercepted
 sudo scripts/20-adguard.sh   # LAN DNS
@@ -36,9 +37,14 @@ sudo scripts/50-hardening.sh # ssh, unattended upgrades, timers
 sudo gw check                # prove the whole path end to end
 ```
 
-`00-bootstrap.sh` installs the Go toolchain, builds `bin/gw` and links it to
-`/usr/local/bin/gw`; everything after that is a `gw` command. Run the scripts
-in order. Each one leaves the box in a working state and tells you what to
+`00-bootstrap.sh` runs twice, and stops the first time on purpose: the network
+setup needs `net.static_ip` and `net.wan_if`, which `gw init` writes — and
+`gw init` needs the binary the first run builds. Both runs are idempotent. If
+this box has no direct route to the internet yet, the config that would hold
+the proxy does not exist either, so pass it in the environment:
+`sudo GW_PROXY=socks5h://127.0.0.1:1080 scripts/00-bootstrap.sh`.
+
+Run the scripts in order. Each one leaves the box in a working state and tells you what to
 verify before moving on — `10-xray.sh` confirms the tunnel over
 SOCKS *before* any traffic is intercepted, so a bad XHTTP parameter can't take
 the LAN offline.

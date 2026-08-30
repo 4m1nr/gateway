@@ -12,12 +12,17 @@
 # no easy way back in.
 set -euo pipefail
 
-. /usr/local/lib/gateway/env
-. /usr/local/lib/gateway/net.sh
+GW_LIB="${GW_LIB:-/usr/local/lib/gateway}"
+. "$GW_LIB/env"
+. "$GW_LIB/net.sh"
 
-BIN=/usr/local/bin/xray
-SHARE=/usr/local/share/xray
-CONFIG=/usr/local/etc/xray/config.json
+# Paths are overridable so the update path can be exercised against a scratch
+# tree rather than the live system. Nothing here changes on a real box: these
+# are the same locations, just not hardcoded, and the download-verify-test-
+# rollback sequence is the part most worth being able to test.
+BIN="${GW_XRAY_BIN:-/usr/local/bin/xray}"
+SHARE="${GW_XRAY_SHARE:-/usr/local/share/xray}"
+CONFIG="${GW_XRAY_CONFIG:-/usr/local/etc/xray/config.json}"
 REPO_URL=https://github.com/XTLS/Xray-core
 
 log() { printf '==> %s\n' "$*"; }

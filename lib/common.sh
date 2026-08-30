@@ -47,10 +47,37 @@ confirm() {
 #
 # None of this applies once the gateway is running: the box's own traffic is
 # routed through Xray by the OUTPUT chain.
+# Resolution order, which mirrors system.BootstrapProxy on the Go side:
+#
+#   1. GW_PROXY               always wins, tunnel or not — someone passing it
+#                             has said what they want
+#   2. tunnel up              nothing; the box's own traffic already goes
+#                             through Xray, so the proxy would send the
+#                             download out through a tunnel already carrying it
+#   3. gateway.toml           the configured value, once that file exists
+#   4. the rendered env file  after an apply, for scripts run without the repo
+#
+# 00-bootstrap.sh runs BEFORE `gw init`, so on a first install there is no
+# gateway.toml to read and GW_PROXY is the only way to reach the internet
+# through a proxy. That is not a workaround: it is the only order that
+# terminates, because the config is written by a binary this script builds.
+gw_tunnel_is_up() {
+  [ "$(cat /run/gateway/tunnel 2>/dev/null || true)" = "up" ]
+}
+
 gw_proxy() {
   if [ -n "${GW_PROXY:-}" ]; then printf '%s' "$GW_PROXY"; return; fi
-  sed -n 's/^socks_proxy *= *"\(.*\)"/\1/p' \
-    <(sed -n '/^\[bootstrap\]/,/^\[/p' "$CONFIG") | head -1
+  gw_tunnel_is_up && return 0
+
+  local proxy=""
+  if [ -f "$CONFIG" ]; then
+    proxy=$(sed -n '/^\[bootstrap\]/,/^\[/p' "$CONFIG" \
+            | sed -n 's/^socks_proxy *= *"\(.*\)"/\1/p' | head -1)
+  fi
+  if [ -z "$proxy" ] && [ -f /usr/local/lib/gateway/env ]; then
+    proxy=$( . /usr/local/lib/gateway/env 2>/dev/null; printf '%s' "${BOOTSTRAP_PROXY:-}" )
+  fi
+  printf '%s' "$proxy"
 }
 
 gw_curl() {
@@ -135,4 +162,14 @@ verify_sha() {
 
 # The repo may be checked out anywhere; the config lives beside it.
 CONFIG="${GW_CONFIG:-$REPO/gateway.toml}"
-[ -f "$CONFIG" ] || die "$CONFIG not found — run \`gw init\` first"
+
+# Sourcing this file must NOT require the config to exist.
+#
+# 00-bootstrap.sh runs before `gw init` — it is what builds the binary that
+# writes the config — so a hard check here made the first command of a fresh
+# install fail before it did anything. Scripts that genuinely need the config
+# call require_config; the ones that only read an optional value from it, like
+# the timezone, tolerate its absence.
+require_config() {
+  [ -f "$CONFIG" ] || die "$CONFIG not found — run \`gw init\` first"
+}
