@@ -93,6 +93,18 @@ func printDiag(d diag.Diag) {
 	section("forward (traffic that was NOT intercepted)")
 	printCounters(d.Counters["forward"])
 
+	// Collected but not shown was worse than not collecting it: the counters
+	// that answer "why is this device missing from AdGuard's log" were sitting
+	// in the report where nobody could read them.
+	if dns := d.Counters["dnsintercept"]; len(dns) > 0 {
+		section("dns redirect (plain DNS from the LAN to AdGuard)")
+		printCounters(dns)
+	} else {
+		section("dns redirect")
+		fmt.Println("  no dnsintercept chain — dns.intercept is off, so " +
+			"every device keeps whatever resolver it was given")
+	}
+
 	section("policy routing")
 	for _, r := range d.Rules {
 		fmt.Printf("  %s\n", r)
