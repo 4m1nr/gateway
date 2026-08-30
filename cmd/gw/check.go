@@ -8,6 +8,7 @@ import (
 
 	"github.com/am1nr/gateway/internal/check"
 	"github.com/am1nr/gateway/internal/cli"
+	"github.com/am1nr/gateway/internal/config"
 	"github.com/am1nr/gateway/internal/system"
 )
 
@@ -30,6 +31,19 @@ func cmdCheck(args []string) error {
 		Env:        cli.Env(envPath),
 		Systemd:    system.Systemd{},
 		Killswitch: *killswitch,
+	}
+	// A config that does not load is reported by its own section; the upstream
+	// probes are simply skipped rather than failing the whole run here.
+	if paths, err := cli.Resolve(); err == nil {
+		if cfg, err := config.Load(paths.Config); err == nil {
+			for _, u := range cfg.Upstreams {
+				runner.Upstreams = append(runner.Upstreams, check.Upstream{
+					Name:      u.Name,
+					Location:  u.Location,
+					ProbePort: u.ProbePort,
+				})
+			}
+		}
 	}
 	report := runner.Run()
 

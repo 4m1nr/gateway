@@ -521,7 +521,27 @@ func (c *Config) parseUpstreams(raw map[string]any) error {
 		if err != nil {
 			return err
 		}
-		up := &Upstream{Name: name, Outbound: ob}
+		location := str(u, "location", "outside")
+		if location != "inside" && location != "outside" {
+			return errf("%s.location is %q — it must be \"inside\" (in the country) "+
+				"or \"outside\"", where, location)
+		}
+		resolver := str(u, "dns", "")
+		if resolver != "" && !isIPLiteral(resolver) {
+			return errf("%s.dns must be an IP address, not %q — resolving the "+
+				"resolver would need the DNS this is meant to provide",
+				where, resolver)
+		}
+		// One loopback port per upstream, so each can be probed on its own.
+		// Numbered from the SOCKS port so they move together and a box with an
+		// unusual port layout does not collide.
+		up := &Upstream{
+			Name:      name,
+			Outbound:  ob,
+			Location:  location,
+			DNS:       resolver,
+			ProbePort: c.SocksPort + 100 + len(c.Upstreams),
+		}
 		c.Upstreams = append(c.Upstreams, up)
 		c.upstreamByName[name] = up
 	}

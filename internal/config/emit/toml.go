@@ -144,7 +144,9 @@ var layout = []section{
 		doc: "Extra servers that profiles can route selected traffic through — a work\n" +
 			"VPN, a second exit country. Each is a complete Xray outbound, like the\n" +
 			"main one.",
-		keys: []entry{{"name", ""}, {"file", ""}, {"json", ""}, {"server_ip", ""}},
+		keys: []entry{{"name", ""}, {"file", ""}, {"json", ""}, {"server_ip", ""},
+			{"location", `"inside" or "outside" — which address gw check probes through it`},
+			{"dns", "a resolver reached THROUGH this upstream, for the names routed here"}},
 	},
 	{
 		name:  "profile",

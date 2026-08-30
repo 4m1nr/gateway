@@ -98,6 +98,18 @@ file    = "outbounds/backup.json"
 #  to lowercase letters, digits and dashes.
 # ============================================================================
 # [[upstream]]
+# name     = "work"
+# file     = "outbounds/work.json"
+# location = "outside"          # or "inside" — which address `gw check` probes
+#                               # through it. A domestic server fetching a
+#                               # foreign site proves nothing, and a foreign one
+#                               # fetching a domestic site is often refused at
+#                               # the far end; either way the wrong probe calls
+#                               # a working server dead.
+# dns      = "172.30.0.53"      # optional: a resolver reached THROUGH this
+#                               # upstream. Names a profile routes here are
+#                               # resolved by it, so a network that answers its
+#                               # own names differently answers them itself.
 # name      = "work"
 # file      = "outbounds/work.json"
 # server_ip = ""

@@ -118,6 +118,25 @@
         ],
         "routeOnly": true
       }
+    },
+    {
+      "tag": "probe-work-in",
+      "listen": "127.0.0.1",
+      "port": 10908,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ],
+        "routeOnly": true
+      }
     }
   ],
   "outbounds": [
@@ -237,6 +256,23 @@
       },
       {
         "type": "field",
+        "inboundTag": [
+          "probe-work-in"
+        ],
+        "outboundTag": "up-work"
+      },
+      {
+        "type": "field",
+        "inboundTag": [
+          "dns-in"
+        ],
+        "domain": [
+          "domain:corp.work-example.com"
+        ],
+        "outboundTag": "up-work"
+      },
+      {
+        "type": "field",
         "source": [
           "192.168.1.99"
         ],
@@ -315,13 +351,6 @@
           "geoip:ir"
         ],
         "outboundTag": "direct"
-      },
-      {
-        "type": "field",
-        "source": [
-          "192.168.1.70"
-        ],
-        "outboundTag": "proxy"
       },
       {
         "type": "field",

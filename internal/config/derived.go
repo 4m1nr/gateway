@@ -218,3 +218,19 @@ func (c *Config) UpstreamNames() []string {
 	}
 	return out
 }
+
+// isIPLiteral reports whether a value is a bare IP address.
+func isIPLiteral(value string) bool {
+	_, err := netip.ParseAddr(strings.TrimSpace(value))
+	return err == nil
+}
+
+// UpstreamByTag finds an upstream by its Xray outbound tag.
+func (c *Config) UpstreamByTag(tag string) *Upstream {
+	for _, u := range c.Upstreams {
+		if u.Outbound.Tag == tag {
+			return u
+		}
+	}
+	return nil
+}

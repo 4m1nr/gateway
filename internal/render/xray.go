@@ -105,6 +105,22 @@ func xrayDNS(c *config.Config) *jsonx.Object {
 		))
 	}
 
+	// An upstream's own resolver, for the names routed to that upstream. First,
+	// so it wins over the domestic and DoH servers below: a corporate name that
+	// falls through to a public resolver comes back with the outside view, or
+	// NXDOMAIN, and the profile route then has nothing to act on.
+	for _, group := range dnsThroughUpstream(c) {
+		up := c.UpstreamByTag(group.tag)
+		if up == nil || up.DNS == "" {
+			continue // no resolver declared; the query still rides the upstream
+		}
+		servers = append(servers, obj(
+			"address", up.DNS,
+			"domains", strs(group.domains),
+			"skipFallback", true,
+		))
+	}
+
 	// Domestic names: direct resolver, and only trust answers that look
 	// domestic.
 	domestic := make([]any, 0, len(c.DirectGeosite)+len(c.DirectSuffixes))
@@ -154,7 +170,7 @@ func xrayInbounds(c *config.Config) []any {
 		"destOverride", arr("http", "tls", "quic"),
 		"routeOnly", true,
 	)
-	return []any{
+	in := []any{
 		// Loopback-only stats API. `gw check` uses the per-outbound counters to
 		// prove which path a flow actually took.
 		obj(
@@ -189,7 +205,25 @@ func xrayInbounds(c *config.Config) []any {
 			"sniffing", sniffing,
 		),
 	}
+	// One per upstream, wired straight to it by an inboundTag rule. Without
+	// these an upstream can only be tested through whatever routing happens to
+	// send its way, so "is the work server up?" is not a question the box can
+	// answer -- and a dead upstream looks like a broken profile.
+	for _, u := range c.Upstreams {
+		in = append(in, obj(
+			"tag", upstreamInbound(u.Name),
+			"listen", "127.0.0.1",
+			"port", num(u.ProbePort),
+			"protocol", "socks",
+			"settings", obj("auth", "noauth", "udp", true),
+			"sniffing", sniffing,
+		))
+	}
+	return in
 }
+
+// upstreamInbound is the tag of an upstream's own probe inbound.
+func upstreamInbound(name string) string { return "probe-" + name + "-in" }
 
 // --------------------------------------------------------------- outbounds --
 
@@ -231,6 +265,53 @@ func directSockopt(c *config.Config) *jsonx.Object {
 }
 
 // ----------------------------------------------------------------- routing --
+
+// dnsTag labels Xray's own DNS queries so routing rules can match them.
+const dnsTag = "dns-in"
+
+// upstreamDomains is one upstream and the names routed to it.
+type upstreamDomains struct {
+	tag     string
+	domains []string
+}
+
+// dnsThroughUpstream groups profile-route domains by the upstream they go to.
+//
+// Only upstreams: proxy and direct already resolve the way their traffic
+// travels, and block has nothing to resolve.
+func dnsThroughUpstream(c *config.Config) []upstreamDomains {
+	byTag := map[string][]string{}
+	var order []string
+	for _, p := range c.Profiles {
+		for _, r := range p.Routes {
+			if len(r.Domains) == 0 || c.UpstreamByTag(r.Tag) == nil {
+				continue
+			}
+			if _, seen := byTag[r.Tag]; !seen {
+				order = append(order, r.Tag)
+			}
+			for _, d := range r.Domains {
+				if !contains(byTag[r.Tag], d) {
+					byTag[r.Tag] = append(byTag[r.Tag], d)
+				}
+			}
+		}
+	}
+	out := make([]upstreamDomains, 0, len(order))
+	for _, tag := range order {
+		out = append(out, upstreamDomains{tag: tag, domains: byTag[tag]})
+	}
+	return out
+}
+
+func contains(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
 
 // tunnelTarget points a rule at the tunnel.
 //
@@ -278,6 +359,29 @@ func xrayRouting(c *config.Config) *jsonx.Object {
 	// other rule can claim it.
 	rules := []any{
 		obj("type", "field", "inboundTag", arr("api"), "outboundTag", "api"),
+	}
+
+	// Each upstream's probe inbound goes to that upstream and nowhere else.
+	// Above every other rule on purpose: the point of the probe is to test one
+	// server, so a geo split or a block rule claiming it would make the answer
+	// describe the routing instead.
+	for _, u := range c.Upstreams {
+		rules = append(rules, obj("type", "field",
+			"inboundTag", arr(upstreamInbound(u.Name)),
+			"outboundTag", u.Outbound.Tag))
+	}
+
+	// Names that a profile sends through an upstream have to be RESOLVED
+	// through it too. Xray's own DNS queries carry no client address, so the
+	// profile rules below -- which all match on source -- never apply to them,
+	// and the name is answered from the wrong side of the tunnel. For a network
+	// that answers its own names differently, which is most of them, that means
+	// the address is the outside view or nothing at all.
+	for _, domains := range dnsThroughUpstream(c) {
+		rules = append(rules, obj("type", "field",
+			"inboundTag", arr(dnsTag),
+			"domain", strs(domains.domains),
+			"outboundTag", domains.tag))
 	}
 
 	// position = "first": ahead of even the per-client policy rules. This is
@@ -354,6 +458,14 @@ func xrayRouting(c *config.Config) *jsonx.Object {
 	// still gets the domestic-direct split for everything its own rules did not
 	// claim.
 	for _, p := range c.Profiles {
+		// base = "proxy" is what every unmatched flow already does, so a rule
+		// saying it again only pins the device to a decision the catch-all
+		// makes anyway — and reads, in the generated config, as if the profile
+		// were treated differently from a plain proxy client. It is not.
+		// base = "direct" does differ from the catch-all, so it stays.
+		if p.Base == "proxy" {
+			continue
+		}
 		if sources := c.ProfileSources(p.Name); len(sources) > 0 {
 			rules = append(rules, tunnelTarget(c, obj("type", "field",
 				"source", strs(sources)), p.Base))

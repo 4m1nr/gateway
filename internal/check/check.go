@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,9 +64,21 @@ type Runner struct {
 	// Killswitch additionally stops Xray to prove that proxied traffic dies
 	// rather than leaking. It causes a brief outage, so it is opt-in.
 	Killswitch bool
+	// Upstreams are the extra servers, each with its own loopback probe port.
+	// Read from the config rather than the env file: a list does not fit a flat
+	// KEY=value file without lying about it, the same reason geodata is not
+	// exported there.
+	Upstreams []Upstream
 
 	report  Report
 	section *Section
+}
+
+// Upstream is one extra server, as `gw check` needs to see it.
+type Upstream struct {
+	Name      string
+	Location  string // "inside" or "outside"
+	ProbePort int
 }
 
 func (r *Runner) sec(name string) {
@@ -118,6 +131,7 @@ func (r *Runner) Run() Report {
 	r.checkDefaultPolicy()
 	r.checkEgress()
 	r.checkSplitRouting()
+	r.checkUpstreams()
 	r.checkDNS()
 	r.checkIPv6()
 	r.checkDashboard()
@@ -401,6 +415,48 @@ func (r *Runner) checkSplitRouting() {
 	r.verdict(counter(apiPort, "outbound>>>proxy>>>traffic>>>uplink") > beforeProxy,
 		"foreign request went through the tunnel",
 		"foreign request did not use the proxy outbound")
+}
+
+// ------------------------------------------------------------- upstreams --
+
+// Each upstream gets its own loopback SOCKS inbound wired straight to it, so
+// this tests one server rather than whatever routing happens to send its way.
+//
+// The address probed follows the upstream's declared location. A domestic
+// server fetching a foreign site proves nothing about the server -- that path
+// is what the tunnel exists to fix -- and a foreign server fetching a domestic
+// site is often refused at the far end rather than broken here. Either way the
+// wrong probe reports a working server as dead.
+func (r *Runner) checkUpstreams() {
+	if len(r.Upstreams) == 0 {
+		return
+	}
+	r.sec("upstreams")
+
+	foreign := r.env("PROBE_URL", "https://www.gstatic.com/generate_204")
+	domestic := r.env("DOMESTIC_PROBE_URL", "https://www.irna.ir")
+
+	for _, u := range r.Upstreams {
+		target, where := foreign, "outside"
+		if u.Location == "inside" {
+			target, where = domestic, "inside"
+		}
+		port := strconv.Itoa(u.ProbePort)
+		out, err := curl(25*time.Second, port, target)
+		switch {
+		case err == nil && out != "":
+			r.ok("%s (%s) reaches %s as %s", u.Name, where, target, out)
+		case err == nil:
+			r.ok("%s (%s) reaches %s", u.Name, where, target)
+		default:
+			r.badf("Test it directly:\n"+
+				"  curl -v --socks5-hostname 127.0.0.1:"+port+" "+target+"\n"+
+				"Check the outbound's server, credentials and clock. If the server "+
+				"is fine,\nconfirm location is right: an %s server is being asked "+
+				"for %s.",
+				"%s (%s) cannot reach %s", u.Name, where, target)
+		}
+	}
 }
 
 // ------------------------------------------------------------------- dns --

@@ -59,6 +59,21 @@ type Client struct {
 type Upstream struct {
 	Name     string
 	Outbound *Outbound
+	// Location is "inside" or "outside": whether this server sits in the
+	// country. It decides which address `gw check` probes through it — a
+	// domestic server reaching a foreign site proves nothing about the split,
+	// and a foreign one reaching a domestic site is often blocked at the far
+	// end rather than broken here.
+	Location string
+	// DNS is a resolver reached THROUGH this upstream, for the names routed to
+	// it. A corporate network usually answers its own names differently from
+	// the public internet, and resolving them anywhere else returns the
+	// outside view or nothing at all.
+	DNS string
+	// ProbePort is a loopback SOCKS inbound wired straight to this upstream, so
+	// it can be tested on its own rather than only as part of whatever routing
+	// happens to send its way.
+	ProbePort int
 }
 
 // ProfileRoute is one destination-specific exception inside a profile.

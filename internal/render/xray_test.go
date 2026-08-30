@@ -165,6 +165,13 @@ func TestProfileFallthroughFollowsTheGeoSplit(t *testing.T) {
 	}
 
 	for _, p := range cfg.Profiles {
+		// base = "proxy" emits no fallthrough: it would only repeat what the
+		// catch-all already does, and the device is meant to behave like any
+		// proxy client. Ordering against the geo split is still the question
+		// here, but only for a base that actually produces a rule.
+		if p.Base == "proxy" {
+			continue
+		}
 		// The fallthrough is the rule whose source is exactly this profile's
 		// source set and which matches nothing else. Matching on outboundTag
 		// alone would also catch the per-client `direct` rule.
@@ -420,31 +427,66 @@ func TestEverythingThatMeansTheTunnelFailsOverTogether(t *testing.T) {
 	}
 }
 
-// A profile whose base is proxy inherits the failover, which is the case that
-// prompted this: the device is intercepted, its unmatched traffic goes to the
-// tunnel, and "the tunnel" has to mean the same thing for it as for everyone
-// else.
-func TestProfileInheritsFailoverFromProxy(t *testing.T) {
+// A profile whose base is proxy is treated as a proxy client, not as a special
+// case that happens to resolve the same way.
+//
+// It used to get a rule of its own saying "send this device to proxy" — which
+// is what the catch-all already does for everyone. The rule changed nothing and
+// read, in the generated config, as though the device were being handled
+// differently. The device now falls through like any other proxy client, which
+// also means it picks up the failover from the catch-all rather than needing
+// its own copy of that decision.
+func TestProfileWithProxyBaseIsNotPinned(t *testing.T) {
 	t.Chdir(repoRoot(t))
 	cfg := configWithFallbackAndProfile(t)
 
 	rs := rules(t, decodeRendered(t, cfg))
-	found := false
-	for _, r := range rs {
+	for i, r := range rs {
 		if !sameStringSet(r, "source", []string{"192.168.1.70"}) {
 			continue
 		}
 		if r.Has("domain") || r.Has("ip") {
-			continue // an exception, not the fallthrough
+			continue // one of the profile's own exceptions, which is the point of it
 		}
-		found = true
-		if tag, _ := r.GetString("balancerTag"); tag != "tunnel" {
-			t.Errorf("the profile's fallthrough is %v, so it would not fail over", r.Keys())
+		t.Errorf("rule %d pins the device to a decision the catch-all already "+
+			"makes: %v", i, r.Keys())
+	}
+
+	// And what it falls through to is the balancer, so it still fails over.
+	last := rs[len(rs)-1]
+	if tag, _ := last.GetString("balancerTag"); tag != "tunnel" {
+		t.Errorf("the catch-all it now relies on is %v, not the balancer", last.Keys())
+	}
+}
+
+// base = "direct" does differ from the catch-all, so that rule has to stay --
+// without it the device would be proxied, which is the opposite of what the
+// profile asks for.
+func TestProfileWithDirectBaseKeepsItsRule(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := loadFixture(t, "profiles")
+
+	var direct []string
+	for _, p := range cfg.Profiles {
+		if p.Base == "direct" {
+			direct = cfg.ProfileSources(p.Name)
 		}
 	}
-	if !found {
-		t.Fatal("the profile has no fallthrough rule at all")
+	if len(direct) == 0 {
+		t.Skip("no direct-based profile in this fixture")
 	}
+
+	rs := rules(t, decodeRendered(t, cfg))
+	for _, r := range rs {
+		if !sameStringSet(r, "source", direct) || r.Has("domain") || r.Has("ip") {
+			continue
+		}
+		if tag, _ := r.GetString("outboundTag"); tag == "direct" {
+			return
+		}
+	}
+	t.Error("a direct-based profile has no fallthrough, so its devices would be " +
+		"proxied by the catch-all")
 }
 
 // Without a fallback there is no balancer, and the rules must name the outbound
@@ -540,4 +582,264 @@ func TestBlockedNetworksBeatEveryRoutingRule(t *testing.T) {
 				"at %d, so those clients would reach a blocked network", i, blocked)
 		}
 	}
+}
+
+// ------------------------------------------------------ upstream probing --
+
+const upstreamFixture = `
+[[upstream]]
+name     = "work"
+json     = """{"protocol":"freedom","settings":{}}"""
+location = "outside"
+dns      = "172.30.0.53"
+
+[[upstream]]
+name     = "home"
+json     = """{"protocol":"freedom","settings":{}}"""
+location = "inside"
+
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+
+  [[profile.route]]
+  via     = "work"
+  domains = ["domain:corp.example"]
+
+[[client]]
+ip     = "192.168.1.70"
+name   = "laptop"
+policy = "work-laptop"
+`
+
+// An upstream that cannot be tested on its own can only be tested through
+// whatever routing happens to send its way, so "is the work server up?" is not
+// a question the box can answer — and a dead upstream looks like a broken
+// profile.
+func TestEachUpstreamHasItsOwnProbeInbound(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := configWith(t, upstreamFixture)
+	doc := decodeRendered(t, cfg)
+
+	inbounds, ok := doc.GetArray("inbounds")
+	if !ok {
+		t.Fatal("no inbounds")
+	}
+	ports := map[string]int{}
+	for _, raw := range inbounds {
+		in, ok := raw.(*jsonx.Object)
+		if !ok {
+			continue
+		}
+		tag, _ := in.GetString("tag")
+		listen, _ := in.GetString("listen")
+		if !strings.HasPrefix(tag, "probe-") {
+			continue
+		}
+		if listen != "127.0.0.1" {
+			t.Errorf("%s listens on %q — a probe port reachable from the LAN is "+
+				"an unauthenticated way into the tunnel", tag, listen)
+		}
+		raw, _ := in.GetNumber("port")
+		port, err := raw.Int64()
+		if err != nil {
+			t.Errorf("%s has a non-numeric port %q", tag, raw)
+		}
+		ports[tag] = int(port)
+	}
+
+	for _, u := range cfg.Upstreams {
+		tag := "probe-" + u.Name + "-in"
+		if ports[tag] == 0 {
+			t.Errorf("upstream %q has no probe inbound", u.Name)
+		}
+		if ports[tag] != u.ProbePort {
+			t.Errorf("upstream %q probes on %d, but the config says %d",
+				u.Name, ports[tag], u.ProbePort)
+		}
+	}
+	if len(ports) != len(cfg.Upstreams) {
+		t.Errorf("got %d probe inbounds for %d upstreams", len(ports), len(cfg.Upstreams))
+	}
+	// Two upstreams sharing a port would silently probe the same server twice.
+	seen := map[int]string{}
+	for tag, port := range ports {
+		if other, dup := seen[port]; dup {
+			t.Errorf("%s and %s both listen on %d", tag, other, port)
+		}
+		seen[port] = tag
+	}
+}
+
+// The probe must reach its own upstream and nothing else: a geo split or a
+// block rule claiming it would make the answer describe the routing instead of
+// the server.
+func TestProbeTrafficIsNotDivertedByOtherRules(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := configWith(t, upstreamFixture)
+	rs := rules(t, decodeRendered(t, cfg))
+
+	for _, u := range cfg.Upstreams {
+		tag := "probe-" + u.Name + "-in"
+		at := -1
+		for i, r := range rs {
+			if hasStringItem(r, "inboundTag", tag) {
+				at = i
+				if got, _ := r.GetString("outboundTag"); got != u.Outbound.Tag {
+					t.Errorf("%s routes to %q, want %q", tag, got, u.Outbound.Tag)
+				}
+				break
+			}
+		}
+		if at < 0 {
+			t.Errorf("nothing routes %s, so the probe follows the ordinary rules", tag)
+			continue
+		}
+		// Only rules keyed on another inbound may precede it. Those cannot
+		// match this probe's traffic; anything else could.
+		for i, r := range rs[:at] {
+			if _, keyed := r.GetArray("inboundTag"); keyed {
+				continue
+			}
+			t.Errorf("rule %d could claim %s before it reaches its upstream: %v",
+				i, tag, r.Keys())
+		}
+	}
+}
+
+// ------------------------------------------------------------ profile dns --
+
+// Names a profile sends through an upstream have to be RESOLVED through it.
+//
+// Xray's own DNS queries carry no client address, so every profile rule — all
+// of which match on source — misses them, and the name is answered from the
+// wrong side of the tunnel. For a network that answers its own names
+// differently, that is the outside view or nothing at all.
+func TestProfileDomainsResolveThroughTheirUpstream(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := configWith(t, upstreamFixture)
+	rs := rules(t, decodeRendered(t, cfg))
+
+	found := false
+	for _, r := range rs {
+		if !hasStringItem(r, "inboundTag", "dns-in") {
+			continue
+		}
+		if !hasStringItem(r, "domain", "domain:corp.example") {
+			continue
+		}
+		found = true
+		if tag, _ := r.GetString("outboundTag"); tag != "up-work" {
+			t.Errorf("the DNS query for a work name goes to %q, not the work upstream", tag)
+		}
+	}
+	if !found {
+		t.Error("no rule routes the DNS query for a profile-routed name, so it " +
+			"resolves through the main tunnel instead")
+	}
+}
+
+// And it is asked of the resolver that knows the answer, ahead of the public
+// servers — a corporate name falling through to a public resolver comes back
+// with the outside view, or NXDOMAIN.
+func TestUpstreamResolverWinsOverThePublicOnes(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := configWith(t, upstreamFixture)
+	doc := decodeRendered(t, cfg)
+
+	dns, ok := doc.GetObject("dns")
+	if !ok {
+		t.Fatal("no dns section")
+	}
+	servers, _ := dns.GetArray("servers")
+
+	at := -1
+	for i, raw := range servers {
+		srv, ok := raw.(*jsonx.Object)
+		if !ok {
+			continue
+		}
+		if addr, _ := srv.GetString("address"); addr == "172.30.0.53" {
+			at = i
+			if !hasStringItem(srv, "domains", "domain:corp.example") {
+				t.Error("the upstream resolver is not scoped to the names routed there")
+			}
+		}
+	}
+	if at < 0 {
+		t.Fatal("the upstream's declared resolver is not in the DNS servers")
+	}
+	for i, raw := range servers[at+1:] {
+		if _, isPlain := raw.(string); isPlain {
+			continue // a bare DoH URL, which is the general fallback
+		}
+		_ = i
+	}
+	// It must not sit after the general domestic server, which claims geosite
+	// ranges broadly enough to swallow a corporate name.
+	for i, raw := range servers[:at] {
+		srv, ok := raw.(*jsonx.Object)
+		if !ok {
+			continue
+		}
+		if hasStringItem(srv, "domains", "geosite:private") {
+			t.Errorf("server %d claims domestic names before the upstream resolver at %d",
+				i, at)
+		}
+	}
+}
+
+// An upstream with no declared resolver still gets the routing rule: the query
+// rides the upstream even when the answer comes from a public server, which is
+// what makes a split-horizon name resolve from the right side.
+func TestUpstreamWithoutAResolverStillRoutesItsQueries(t *testing.T) {
+	t.Chdir(repoRoot(t))
+	cfg := configWith(t, `
+[[upstream]]
+name = "work"
+json = """{"protocol":"freedom","settings":{}}"""
+
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+
+  [[profile.route]]
+  via     = "work"
+  domains = ["domain:corp.example"]
+
+[[client]]
+ip     = "192.168.1.70"
+name   = "laptop"
+policy = "work-laptop"
+`)
+	rs := rules(t, decodeRendered(t, cfg))
+	for _, r := range rs {
+		if hasStringItem(r, "inboundTag", "dns-in") &&
+			hasStringItem(r, "domain", "domain:corp.example") {
+			return
+		}
+	}
+	t.Error("no DNS routing rule without a declared resolver")
+}
+
+// configWith renders the default fixture plus an appended section.
+func configWith(t *testing.T, body string) *config.Config {
+	t.Helper()
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "tests/fixtures/default.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "tests", "fixtures",
+		".tmp-"+strings.ReplaceAll(t.Name(), "/", "-")+".toml")
+	if err := os.WriteFile(path, []byte(string(raw)+"\n"+body+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(path) })
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	return cfg
 }
