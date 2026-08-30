@@ -2,10 +2,31 @@ package render
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/am1nr/gateway/internal/config"
 	"github.com/am1nr/gateway/internal/jsonx"
 )
+
+// adguardDomain turns an Xray domain rule into an AdGuard domain specifier.
+//
+// AdGuard matches a bare name and everything under it, which is what
+// "domain:" means in Xray -- so git.amnafzar.ir follows amnafzar.ir, the case
+// this exists for. The forms with no AdGuard equivalent are skipped rather
+// than approximated: a geosite: list names thousands of domains, and turning a
+// regexp into a suffix would silently redirect names nobody asked to redirect.
+func adguardDomain(spec string) string {
+	switch {
+	case strings.HasPrefix(spec, "domain:"):
+		return strings.TrimPrefix(spec, "domain:")
+	case strings.HasPrefix(spec, "full:"):
+		return strings.TrimPrefix(spec, "full:")
+	case strings.ContainsAny(spec, ":"):
+		return "" // geosite:, regexp:, ext: -- not expressible here
+	default:
+		return spec
+	}
+}
 
 // AdGuardOverrides is the AdGuard Home settings the gateway owns.
 //
@@ -17,6 +38,30 @@ func AdGuardOverrides(c *config.Config) *jsonx.Object {
 	// rides the tunnel because AdGuard's own egress is captured by the OUTPUT
 	// chain like any other local process.
 	var upstreams []any
+
+	// Names a profile sends through an upstream, resolved by that upstream's
+	// own resolver.
+	//
+	// This is the half that Xray's DNS routing cannot reach: a client asks
+	// AdGuard, and AdGuard answers from its own upstreams, which know nothing
+	// about profiles. Without an entry here a corporate name matches the
+	// domestic [/ir/] rule below and comes back as the public address or
+	// NXDOMAIN -- the routing rule for it is then correct and never has an
+	// address to act on. AdGuard picks the most specific domain match, so
+	// [/amnafzar.ir/] beats [/ir/] regardless of order; first anyway, because
+	// the order is what a person reads.
+	for _, group := range dnsThroughUpstream(c) {
+		up := c.UpstreamByTag(group.tag)
+		if up == nil || up.DNS == "" {
+			continue
+		}
+		for _, spec := range group.domains {
+			if name := adguardDomain(spec); name != "" {
+				upstreams = append(upstreams, fmt.Sprintf("[/%s/]%s", name, up.DNS))
+			}
+		}
+	}
+
 	for _, suffix := range c.DirectSuffixes {
 		for _, res := range c.UpDirect {
 			upstreams = append(upstreams, fmt.Sprintf("[/%s/]%s", suffix, res))

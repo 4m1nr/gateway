@@ -101,7 +101,7 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 	// Both the set and the rule appear only when a route actually names private
 	// space. An empty set, and a rule that can never match, are dead weight in a
 	// file every packet on the box is matched against.
-	setRouted, routedRule := "", ""
+	setRouted, routedRule, routedOutput := "", "", ""
 	if routed := c.RoutedPrivate(); len(routed) > 0 {
 		setRouted = "    set routed_dst {\n" +
 			"        type ipv4_addr\n" +
@@ -120,6 +120,15 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 			"ip saddr @proxy_clients " + dnsExclude + "\\\n" +
 			"            meta mark set $MARK_TPROXY counter \\\n" +
 			"            tproxy ip to :$TPROXY_PORT accept comment \"routed-private\"\n\n"
+		// The box's own traffic to those ranges, which the bypass below would
+		// otherwise send out of the WAN. AdGuard asking a corporate resolver is
+		// exactly this: a local process, a private destination, and no way to
+		// arrive except through the upstream that serves it.
+		routedOutput = "        # Private ranges an upstream serves. Ahead of the bypass, which\n" +
+			"        # would send the box's own queries out of the WAN, where nothing\n" +
+			"        # answers for them.\n" +
+			"        meta l4proto { tcp, udp } ip daddr @routed_dst \\\n" +
+			"            meta mark set $MARK_TPROXY counter accept comment \"routed-private-out\"\n\n"
 	}
 
 	// Catches clients pointed at a public resolver. One pointed at the router
@@ -205,6 +214,7 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 		"LOCAL_FORWARD":       localForward,
 		"SET_ROUTED":          setRouted,
 		"ROUTED_RULE":         routedRule,
+		"ROUTED_OUTPUT":       routedOutput,
 		"DNS_INTERCEPT":       dnsChain,
 		"DNS_EXCLUDE":         dnsExclude,
 		"INPUT_SSH":           sshRule,

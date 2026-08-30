@@ -168,6 +168,12 @@ table inet gateway {
         meta mark $MARK_XRAY return
         meta skuid "xray" return
 
+        # Private ranges an upstream serves. Ahead of the bypass, which
+        # would send the box's own queries out of the WAN, where nothing
+        # answers for them.
+        meta l4proto { tcp, udp } ip daddr @routed_dst \
+            meta mark set $MARK_TPROXY counter accept comment "routed-private-out"
+
         ip daddr @bypass_dst counter return comment "bypass-local"
         meta nfproto ipv6 return
 

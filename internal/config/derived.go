@@ -121,6 +121,14 @@ func (c *Config) RoutedPrivate() []string {
 			}
 		}
 	}
+	// An upstream's declared resolver is an address that upstream serves. It
+	// needs the same carve-out as any other private destination routed there,
+	// or the box asks it over the WAN and never reaches it.
+	for _, u := range c.Upstreams {
+		if u.DNS != "" {
+			add(u.DNS)
+		}
+	}
 
 	sortPrefixes(out)
 	res := make([]string, 0, len(out))

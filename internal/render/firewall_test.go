@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/am1nr/gateway/internal/config"
+	"github.com/am1nr/gateway/internal/jsonx"
 )
 
 // chain extracts one nftables chain body.
@@ -640,5 +641,112 @@ func TestDNSRedirectIsCounted(t *testing.T) {
 	}
 	if notPlain < redirect {
 		t.Error("the catch-all counts redirected queries too")
+	}
+}
+
+// A name a profile routes has to RESOLVE through that upstream, and the client
+// asks AdGuard, not Xray.
+//
+// This is the half Xray's DNS routing cannot reach: AdGuard answers from its
+// own upstreams, which know nothing about profiles. Without an entry here a
+// corporate name matches the domestic [/ir/] rule and comes back as the public
+// address or NXDOMAIN — and the routing rule for it is then correct with no
+// address to act on. git.amnafzar.ir under amnafzar.ir is the case: AdGuard
+// matches a bare name and everything beneath it.
+const workDNS = `
+[dns]
+direct_suffixes  = ["ir"]
+upstreams_direct = ["178.22.122.100"]
+
+[[upstream]]
+name     = "work"
+json     = """{"protocol":"freedom","settings":{}}"""
+location = "inside"
+dns      = "172.30.0.53"
+
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+
+  [[profile.route]]
+  via     = "work"
+  domains = ["domain:amnafzar.ir", "geosite:category-ads-all"]
+
+[[client]]
+ip     = "192.168.1.20"
+name   = "laptop"
+policy = "work-laptop"
+`
+
+func TestAdGuardAsksTheUpstreamResolverForItsNames(t *testing.T) {
+	cfg := loadWithSection(t, workDNS)
+	body, err := jsonx.EncodeIndented(AdGuardOverrides(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+
+	if !strings.Contains(got, `[/amnafzar.ir/]172.30.0.53`) {
+		t.Errorf("AdGuard is not told to ask the work resolver for work names:\n%s", got)
+	}
+	// The domestic rule must still be there — this adds a specific case, it
+	// does not replace the split.
+	if !strings.Contains(got, `[/ir/]178.22.122.100`) {
+		t.Error("the domestic split was lost")
+	}
+	// And the specific entry must come first, which is the order a person
+	// reads even though AdGuard matches on specificity.
+	if strings.Index(got, "[/amnafzar.ir/]") > strings.Index(got, "[/ir/]") {
+		t.Error("the broad domestic rule is listed before the specific one")
+	}
+	// A geosite: list names thousands of domains and has no AdGuard form.
+	// Approximating it would redirect names nobody asked to redirect.
+	if strings.Contains(got, "geosite") {
+		t.Error("a geosite list leaked into AdGuard's upstreams")
+	}
+}
+
+// AdGuard's own query then has to reach that resolver. It is a local process
+// sending to a private address, which the output chain treats as local business
+// and puts out of the WAN, where nothing answers for it.
+func TestTheBoxCanReachAnUpstreamResolver(t *testing.T) {
+	cfg := loadWithSection(t, workDNS)
+	ruleset, err := NFT(cfg, fixedTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := chain(t, ruleset, "output")
+
+	routed := indexOf(out, `comment "routed-private-out"`)
+	bypass := indexOf(out, `comment "bypass-local"`)
+	if routed < 0 {
+		t.Fatal("the box's own traffic to an upstream-served range is not " +
+			"intercepted, so AdGuard's query leaves by the WAN")
+	}
+	if routed > bypass {
+		t.Error("the bypass claims it first, so the query still leaves by the WAN")
+	}
+	if !strings.Contains(ruleset, "172.30.0.53/32") {
+		t.Error("the resolver's address is in no set, so the rule cannot match")
+	}
+}
+
+// Xray must not re-capture its own packets: the marking rule above returns for
+// Xray's socket first, and that ordering is what stops the box deadlocking.
+func TestTheXrayLoopGuardStillPrecedesTheRoutedRule(t *testing.T) {
+	cfg := loadWithSection(t, workDNS)
+	ruleset, err := NFT(cfg, fixedTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := chain(t, ruleset, "output")
+
+	guard := indexOf(out, "meta mark $MARK_XRAY return")
+	routed := indexOf(out, `comment "routed-private-out"`)
+	if guard < 0 || routed < 0 {
+		t.Fatal("expected both the loop guard and the routed rule")
+	}
+	if guard > routed {
+		t.Error("Xray's own packets would be marked for TPROXY and the box deadlocks")
 	}
 }
