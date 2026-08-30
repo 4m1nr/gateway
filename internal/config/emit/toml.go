@@ -177,7 +177,10 @@ var layout = []section{
 			{"block_geosite", "domains dropped outright, for every client"},
 			{"block_geoip", "networks dropped outright, for every client"},
 			{"block_bittorrent", ""},
-			{"extra_local_networks", "private ranges genuinely reachable here, beyond this LAN"},
+			{"extra_local_networks",
+				"private ranges reachable DIRECTLY from here, beyond this LAN — another\n" +
+					"VLAN, a site-to-site link, or a modem on its own subnet. A range that\n" +
+					"should go through an upstream belongs in that profile's route instead."},
 			{"drop_private_destinations",
 				"drop RFC1918 destinations that are not reachable here. A filtering\n" +
 					"resolver answers a blocked name with a private address; without this\n" +

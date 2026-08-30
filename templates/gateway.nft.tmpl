@@ -51,7 +51,7 @@ table inet gateway {
         comment "private space that is not local here — poisoned DNS answers"
 {{ELEM_POISONED}}    }
 
-    set bypass_dst {
+{{SET_ROUTED}}    set bypass_dst {
         type ipv4_addr
         flags interval
         comment "destinations that must never enter the tunnel"
@@ -103,7 +103,7 @@ table inet gateway {
         # The set excludes this LAN and routing.extra_local_networks, so it can
         # only match an address that is genuinely unreachable from here.
 {{POISONED_RULE}}
-        # LAN, tailnet, reserved space: local business, stays local
+{{ROUTED_RULE}}        # LAN, tailnet, reserved space: local business, stays local
         ip daddr @bypass_dst counter return comment "bypass-local"
 {{IPV6_PREROUTING}}
         ip saddr @blocked_clients counter drop comment "blocked-client"

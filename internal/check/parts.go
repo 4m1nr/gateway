@@ -284,3 +284,9 @@ func readFile(path string) string {
 	}
 	return string(raw)
 }
+
+// nftChainLoaded reports whether a chain exists in the running ruleset.
+func nftChainLoaded(name string) bool {
+	_, err := runOut(5*time.Second, "nft", "list", "chain", "inet", "gateway", name)
+	return err == nil
+}

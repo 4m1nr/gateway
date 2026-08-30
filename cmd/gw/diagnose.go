@@ -178,9 +178,13 @@ func printDiag(d diag.Diag) {
 Reading this:
   lan-intercepted / listed-intercepted climbing  the client IS being proxied;
                                                  look at Xray, not the firewall
-  poisoned-dns climbing                          the client is following a
-                                                 poisoned DNS answer — point its
-                                                 DNS at this box
+  poisoned-dns climbing                          the destination is private and
+                                                 unknown here: either a poisoned
+                                                 DNS answer (point the client's
+                                                 DNS at this box) or a network
+                                                 that IS reachable and is not
+                                                 listed — add it to
+                                                 routing.extra_local_networks
   killswitch climbing                            traffic reached forward instead
                                                  of being intercepted
   bypass-local climbing                          the destination is being treated

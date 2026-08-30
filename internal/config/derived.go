@@ -2,6 +2,7 @@ package config
 
 import (
 	"net/netip"
+	"strings"
 )
 
 // ClientsBy returns the addresses of clients assigned the given policy.
@@ -75,6 +76,64 @@ func (c *Config) BypassDst() []string {
 	return append([]string(nil), ReservedDst...)
 }
 
+// RoutedPrivate is private space that routing deliberately sends somewhere.
+//
+// A profile route or a custom rule naming an RFC1918 range — a work network
+// behind an upstream, say — is a statement that those addresses are reached
+// through that outbound. Both of the firewall's blanket rules about private
+// space would otherwise defeat it: the poisoned-DNS drop kills the traffic
+// outright, and the local-business bypass sends it out of the WAN instead of
+// into the tunnel. Xray's rule is then correct and never consulted, because
+// the packets never reach Xray.
+//
+// Only literal prefixes count. A geoip: tag names a file this cannot read.
+func (c *Config) RoutedPrivate() []string {
+	var out []netip.Prefix
+	add := func(raw string) {
+		p, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil {
+			if a, aerr := netip.ParseAddr(strings.TrimSpace(raw)); aerr == nil {
+				p = netip.PrefixFrom(a, a.BitLen())
+			} else {
+				return // a geoip: tag, or something Xray understands and this does not
+			}
+		}
+		p = p.Masked()
+		if !p.Addr().Is4() || !p.Addr().IsPrivate() {
+			return // only RFC1918 is caught by the rules this works around
+		}
+		out = append(out, p)
+	}
+
+	for _, prof := range c.Profiles {
+		for _, r := range prof.Routes {
+			for _, ip := range r.IPs {
+				add(ip)
+			}
+		}
+	}
+	for _, r := range c.Routes {
+		if ips, ok := r.Rule.GetArray("ip"); ok {
+			for _, v := range ips {
+				if s, ok := v.(string); ok {
+					add(s)
+				}
+			}
+		}
+	}
+
+	sortPrefixes(out)
+	res := make([]string, 0, len(out))
+	var last string
+	for _, p := range out {
+		if p.String() != last { // the same range named by two profiles
+			res = append(res, p.String())
+			last = p.String()
+		}
+	}
+	return res
+}
+
 // PoisonedDst is RFC1918 space that is NOT reachable from here.
 //
 // A filtering resolver answers a blocked name with a private address
@@ -96,6 +155,13 @@ func (c *Config) PoisonedDst() []string {
 	}
 	keep := []netip.Prefix{c.LAN}
 	for _, cidr := range c.ExtraLocal {
+		if p, err := netip.ParsePrefix(cidr); err == nil {
+			keep = append(keep, p.Masked())
+		}
+	}
+	// Not local, but not poisoned either: routing has somewhere to send these,
+	// so dropping them would break the route that names them.
+	for _, cidr := range c.RoutedPrivate() {
 		if p, err := netip.ParsePrefix(cidr); err == nil {
 			keep = append(keep, p.Masked())
 		}

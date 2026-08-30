@@ -75,6 +75,30 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 		poisonedRule = "        ip daddr @poisoned_dst counter drop comment \"poisoned-dns\"\n"
 	}
 
+	// Both the set and the rule appear only when a route actually names private
+	// space. An empty set, and a rule that can never match, are dead weight in a
+	// file every packet on the box is matched against.
+	setRouted, routedRule := "", ""
+	if routed := c.RoutedPrivate(); len(routed) > 0 {
+		setRouted = "    set routed_dst {\n" +
+			"        type ipv4_addr\n" +
+			"        flags interval\n" +
+			"        comment \"private space a route sends through an outbound\"\n" +
+			nftElements(routed, 8) +
+			"    }\n\n"
+		routedRule = "        # Private ranges a profile or custom route deliberately sends\n" +
+			"        # through an outbound. Ahead of the bypass below, which would\n" +
+			"        # return them as local business and put them out of the WAN --\n" +
+			"        # leaving Xray with a correct rule it never gets to apply, and a\n" +
+			"        # work network unreachable for exactly the devices meant to reach\n" +
+			"        # it. @proxy_clients excludes blocked and opted-out devices, which\n" +
+			"        # are checked further down.\n" +
+			"        meta l4proto { tcp, udp } ip daddr @routed_dst " +
+			"ip saddr @proxy_clients " + dnsExclude + "\\\n" +
+			"            meta mark set $MARK_TPROXY counter \\\n" +
+			"            tproxy ip to :$TPROXY_PORT accept comment \"routed-private\"\n\n"
+	}
+
 	// Catches clients pointed at a public resolver. One pointed at the router
 	// resolves over the local segment and never reaches this box at all — for
 	// those, the router's DHCP has to hand out this box as the DNS server.
@@ -145,6 +169,8 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 		"FORWARD_DEFAULT":     fwdDefault,
 		"POSTROUTING_DEFAULT": postDefault,
 		"POISONED_RULE":       poisonedRule,
+		"SET_ROUTED":          setRouted,
+		"ROUTED_RULE":         routedRule,
 		"DNS_INTERCEPT":       dnsChain,
 		"DNS_EXCLUDE":         dnsExclude,
 		"INPUT_SSH":           sshRule,
@@ -256,6 +282,9 @@ func Env(c *config.Config, repo string) (string, error) {
 		{"LIFELINE_MIN", strconv.Itoa(lifelineMin(c))},
 		{"UI_PORT", strconv.Itoa(c.UIPort)},
 		{"DNS_PORT", strconv.Itoa(c.DNSPort)},
+		// So `gw check` can tell "intercept is off by choice" from "the chain
+		// is missing because apply never ran".
+		{"DNS_INTERCEPT", boolString(c.DNSIntercept)},
 		{"DEFAULT_POLICY", c.DefaultPolicy},
 		// Consumed by `gw client` and the dashboard so both offer exactly the
 		// policies this config defines.
@@ -312,4 +341,12 @@ func TailscaleArgs(c *config.Config) string {
 		args = append(args, "--advertise-routes="+c.LANCidr)
 	}
 	return strings.Join(args, " ") + "\n"
+}
+
+// boolString renders a flag for the env file the shell helpers source.
+func boolString(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
 }

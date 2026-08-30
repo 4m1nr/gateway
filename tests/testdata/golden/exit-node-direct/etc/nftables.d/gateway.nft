@@ -52,7 +52,14 @@ table inet gateway {
         type ipv4_addr
         flags interval
         comment "private space that is not local here — poisoned DNS answers"
-        elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/24, 192.168.2.0/23, 192.168.4.0/22, 192.168.8.0/21, 192.168.16.0/20, 192.168.32.0/19, 192.168.64.0/18, 192.168.128.0/17 }
+        elements = { 10.0.0.0/12, 10.16.0.0/14, 10.21.0.0/16, 10.22.0.0/15, 10.24.0.0/13, 10.32.0.0/11, 10.64.0.0/10, 10.128.0.0/9, 172.16.0.0/12, 192.168.0.0/24, 192.168.2.0/23, 192.168.4.0/22, 192.168.8.0/21, 192.168.16.0/20, 192.168.32.0/19, 192.168.64.0/18, 192.168.128.0/17 }
+    }
+
+    set routed_dst {
+        type ipv4_addr
+        flags interval
+        comment "private space a route sends through an outbound"
+        elements = { 10.20.0.0/16 }
     }
 
     set bypass_dst {
@@ -108,6 +115,17 @@ table inet gateway {
         # The set excludes this LAN and routing.extra_local_networks, so it can
         # only match an address that is genuinely unreachable from here.
         ip daddr @poisoned_dst counter drop comment "poisoned-dns"
+
+        # Private ranges a profile or custom route deliberately sends
+        # through an outbound. Ahead of the bypass below, which would
+        # return them as local business and put them out of the WAN --
+        # leaving Xray with a correct rule it never gets to apply, and a
+        # work network unreachable for exactly the devices meant to reach
+        # it. @proxy_clients excludes blocked and opted-out devices, which
+        # are checked further down.
+        meta l4proto { tcp, udp } ip daddr @routed_dst ip saddr @proxy_clients th dport != 53 \
+            meta mark set $MARK_TPROXY counter \
+            tproxy ip to :$TPROXY_PORT accept comment "routed-private"
 
         # LAN, tailnet, reserved space: local business, stays local
         ip daddr @bypass_dst counter return comment "bypass-local"

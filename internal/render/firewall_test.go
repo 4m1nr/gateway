@@ -1,6 +1,7 @@
 package render
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -380,4 +381,160 @@ func removeTable(text, header string) string {
 		out = append(out, line)
 	}
 	return strings.Join(out, "\n")
+}
+
+// A private range a route names is reachable through the outbound that names
+// it.
+//
+// Two blanket rules about RFC1918 stood between a profile route and the network
+// it pointed at: the poisoned-DNS drop killed the traffic outright, and the
+// local-business bypass sent whatever survived out of the WAN. Xray's rule was
+// generated correctly and never consulted, because the packets never reached
+// Xray — so a work network was unreachable precisely for the device configured
+// to reach it.
+const workProfile = `
+[[upstream]]
+name = "work"
+json = """{"protocol":"freedom","settings":{}}"""
+
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+
+  [[profile.route]]
+  via = "work"
+  ips = ["172.30.0.0/16"]
+
+[[client]]
+ip     = "192.168.1.70"
+name   = "laptop"
+policy = "work-laptop"
+`
+
+func TestRoutedPrivateRangeIsNotDroppedAsPoisoned(t *testing.T) {
+	cfg := loadWithSection(t, workProfile)
+	for _, cidr := range cfg.PoisonedDst() {
+		p := netip.MustParsePrefix(cidr)
+		if p.Overlaps(netip.MustParsePrefix("172.30.0.0/16")) {
+			t.Errorf("poisoned_dst contains %s, which covers the range the work "+
+				"profile routes — the traffic is dropped before Xray sees it", cidr)
+		}
+	}
+	// The rest of 172.16/12 must still be dropped: carving out one range is the
+	// point, disabling the protection is not.
+	var covered bool
+	for _, cidr := range cfg.PoisonedDst() {
+		if netip.MustParsePrefix(cidr).Overlaps(netip.MustParsePrefix("172.31.0.0/16")) {
+			covered = true
+		}
+	}
+	if !covered {
+		t.Error("carving out the routed range disabled the poisoned-DNS drop for " +
+			"the rest of 172.16.0.0/12")
+	}
+}
+
+func TestRoutedPrivateIsInterceptedBeforeTheLocalBypass(t *testing.T) {
+	cfg := loadWithSection(t, workProfile)
+	ruleset, err := NFT(cfg, fixedTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pre := chain(t, ruleset, "prerouting")
+
+	routed := indexOf(pre, `comment "routed-private"`)
+	bypass := indexOf(pre, `comment "bypass-local"`)
+	if routed < 0 {
+		t.Fatal("nothing intercepts the routed range; the bypass below claims it")
+	}
+	if bypass < 0 {
+		t.Fatal("no bypass rule at all")
+	}
+	if routed > bypass {
+		t.Error("the bypass returns the routed range before anything intercepts " +
+			"it, so it leaves by the WAN instead of the upstream")
+	}
+
+	// And the set it matches has to hold the range, or the rule matches nothing.
+	if !strings.Contains(ruleset, "172.30.0.0/16") {
+		t.Error("172.30.0.0/16 is in no set, so the rule can never match")
+	}
+}
+
+// The rule sits ahead of the blocked- and direct-client checks, so it has to
+// exclude them itself. It does that by matching @proxy_clients, which a blocked
+// or opted-out device is never in — but only as long as the guard is there.
+func TestRoutedPrivateOnlyAppliesToInterceptedClients(t *testing.T) {
+	cfg := loadWithSection(t, workProfile)
+	ruleset, err := NFT(cfg, fixedTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pre := chain(t, ruleset, "prerouting")
+
+	for _, line := range strings.Split(pre, "\n") {
+		if !strings.Contains(line, "@routed_dst") {
+			continue
+		}
+		if !strings.Contains(line, "@proxy_clients") {
+			t.Errorf("the routed-private rule does not check the source set, so a "+
+				"blocked device would be intercepted rather than dropped:\n  %s", line)
+		}
+		return
+	}
+	t.Fatal("no rule matches @routed_dst")
+}
+
+// Nothing changes for a config whose routes name no private space: the rule is
+// left out rather than pointing at an empty set in the path of every packet.
+func TestNoRoutedRuleWithoutARoutedPrivateRange(t *testing.T) {
+	_, ruleset := renderNFT(t, "default")
+	if strings.Contains(ruleset, `comment "routed-private"`) {
+		t.Error("a rule that can never match was added to the prerouting chain")
+	}
+}
+
+// A geoip: tag names a file the config cannot read. It must be skipped rather
+// than crashing the render or landing in a set as a literal.
+func TestGeoTagsInRoutesAreNotTreatedAsAddresses(t *testing.T) {
+	cfg := loadWithSection(t, `
+[[profile]]
+name = "tagged"
+base = "proxy"
+
+  [[profile.route]]
+  via  = "direct"
+  ips  = ["geoip:ir", "10.50.0.0/16"]
+
+[[client]]
+ip     = "192.168.1.71"
+name   = "desk"
+policy = "tagged"
+`)
+	got := cfg.RoutedPrivate()
+	if len(got) != 1 || got[0] != "10.50.0.0/16" {
+		t.Errorf("RoutedPrivate() = %v, want just the literal prefix", got)
+	}
+}
+
+// Public addresses are none of this rule's business: they are neither dropped
+// as poisoned nor returned as local, so they already reach Xray.
+func TestOnlyPrivateRangesJoinTheRoutedSet(t *testing.T) {
+	cfg := loadWithSection(t, `
+[[profile]]
+name = "pub"
+base = "proxy"
+
+  [[profile.route]]
+  via  = "direct"
+  ips  = ["203.0.113.0/24"]
+
+[[client]]
+ip     = "192.168.1.72"
+name   = "desk2"
+policy = "pub"
+`)
+	if got := cfg.RoutedPrivate(); len(got) != 0 {
+		t.Errorf("RoutedPrivate() = %v, want nothing for a public range", got)
+	}
 }

@@ -191,7 +191,13 @@ block_bittorrent = false     # true = drop torrent traffic at the gateway
 drop_private_destinations = true
 
 # Private networks that ARE reachable from this box, and so must not be
-# treated as poisoned — another VLAN, a site-to-site link.
+# treated as poisoned — another VLAN, a site-to-site link, or the modem when
+# it sits on a different subnet from the LAN (a 192.168.0.1 modem behind a
+# 192.168.1.0/24 LAN needs "192.168.0.0/24" here, or it is unreachable).
+#
+# Only for networks reached DIRECTLY. A private range that should go through
+# an upstream belongs in that profile's route instead: those are carved out
+# of the poisoned set and intercepted automatically.
 extra_local_networks = []
 
 # ============================================================================

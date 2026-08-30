@@ -425,6 +425,27 @@ func (r *Runner) checkDNS() {
 	r.verdict(digAnswers(boxIP, "example.com"),
 		"AdGuard answers on "+boxIP+":53",
 		"no answer from "+boxIP+":53 — LAN clients will have no DNS")
+
+	// AdGuard answering is not the same as AdGuard being used. Without the
+	// redirect, a device that names its own resolver keeps it, and everything
+	// AdGuard is here for — filtering, the query log, the split between
+	// domestic and proxied upstreams — quietly does not apply to that device.
+	switch {
+	case r.Env["DNS_INTERCEPT"] != "1":
+		r.skip("dns.intercept is off — a device that names its own resolver " +
+			"keeps it, and AdGuard never sees those queries")
+	case nftChainLoaded("dnsintercept"):
+		// The limit is worth stating even when this passes: the redirect catches
+		// packets that reach the box. One aimed at the router is answered on the
+		// local segment and never arrives.
+		r.ok("plain DNS from the LAN is redirected to AdGuard (devices whose DHCP "+
+			"names the router as DNS still bypass it — hand out %s instead)", boxIP)
+	default:
+		r.badf("Run `sudo gw apply`.\n"+
+			"Check with: nft list chain inet gateway dnsintercept",
+			"dns.intercept is on but the dnsintercept chain is not loaded — every "+
+				"device that names its own resolver is bypassing AdGuard")
+	}
 	r.verdict(digAnswers(boxIP, "irna.ir"),
 		"domestic names resolve",
 		"domestic names do not resolve — check the [/ir/] upstream split")
