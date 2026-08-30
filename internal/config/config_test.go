@@ -293,3 +293,113 @@ func TestValidationRejects(t *testing.T) {
 		})
 	}
 }
+
+// TOML has no schema, so a key in the wrong table is not an error — it is
+// never read, the setting keeps its default, and nothing in the file
+// contradicts what you thought you wrote. `location` on a [[profile]] left the
+// upstream "outside" while the config plainly said inside.
+func TestKeysInTheWrongTableAreRejected(t *testing.T) {
+	cases := []struct {
+		name, body, wants string
+	}{
+		{
+			name: "location on a profile",
+			body: `
+[[upstream]]
+name = "work"
+json = """{"protocol":"freedom","settings":{}}"""
+
+[[profile]]
+name     = "work-laptop"
+base     = "proxy"
+location = "inside"
+`,
+			wants: "[[upstream]]",
+		},
+		{
+			name: "route keys on the profile itself",
+			body: `
+[[profile]]
+name = "work-laptop"
+base = "proxy"
+via  = "direct"
+`,
+			wants: "[[profile.route]]",
+		},
+		{
+			name: "base on a route",
+			body: `
+[[profile]]
+name = "work-laptop"
+
+  [[profile.route]]
+  via  = "direct"
+  base = "proxy"
+`,
+			wants: "[[profile]]",
+		},
+		{
+			name: "a plain typo",
+			body: `
+[[profile]]
+name = "work-laptop"
+bass = "proxy"
+`,
+			wants: "name, base, route",
+		},
+		{
+			name: "an unknown upstream key",
+			body: `
+[[upstream]]
+name   = "work"
+json   = """{"protocol":"freedom","settings":{}}"""
+locale = "inside"
+`,
+			wants: "location",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadWith(t, tc.body)
+			if err == nil {
+				t.Fatal("accepted silently, so the setting keeps its default")
+			}
+			if !strings.Contains(err.Error(), tc.wants) {
+				t.Errorf("the error does not say %q:\n%v", tc.wants, err)
+			}
+		})
+	}
+}
+
+// The keys that ARE right must keep working, or this check makes the config
+// unwritable.
+func TestValidUpstreamAndProfileKeysAreAccepted(t *testing.T) {
+	cfg, err := loadWith(t, `
+[[upstream]]
+name      = "work"
+json      = """{"protocol":"freedom","settings":{}}"""
+location  = "inside"
+dns       = "172.30.0.53"
+server_ip = "203.0.113.9"
+
+[[profile]]
+name = "work-laptop"
+base = "direct"
+
+  [[profile.route]]
+  via     = "work"
+  domains = ["domain:corp.example"]
+  ips     = ["172.30.0.0/16"]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := cfg.Upstreams[0]
+	if u.Location != "inside" {
+		t.Errorf("location read back as %q", u.Location)
+	}
+	if u.DNS != "172.30.0.53" {
+		t.Errorf("dns read back as %q", u.DNS)
+	}
+}

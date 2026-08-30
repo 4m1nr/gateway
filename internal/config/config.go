@@ -506,6 +506,11 @@ func (c *Config) parseUpstreams(raw map[string]any) error {
 	}
 	for i, u := range entries {
 		where := fmt.Sprintf("upstream[%d]", i)
+		if err := checkKeys(u, where,
+			[]string{"name", "file", "json", "server_ip", "server_domain",
+				"location", "dns"}, misplaced); err != nil {
+			return err
+		}
 		name := str(u, "name", "")
 		if !nameRE.MatchString(name) {
 			return errf("%s.name %q must be 1-24 chars of lowercase "+
@@ -565,6 +570,10 @@ func (c *Config) parseProfiles(raw map[string]any) error {
 	}
 	for i, pr := range entries {
 		where := fmt.Sprintf("profile[%d]", i)
+		if err := checkKeys(pr, where,
+			[]string{"name", "base", "route"}, misplaced); err != nil {
+			return err
+		}
 		name := str(pr, "name", "")
 		if !nameRE.MatchString(name) {
 			return errf("%s.name %q must be 1-24 chars of lowercase "+
@@ -595,6 +604,10 @@ func (c *Config) parseProfiles(raw map[string]any) error {
 		var routes []ProfileRoute
 		for j, r := range routeTables {
 			rwhere := fmt.Sprintf("%s.route[%d]", where, j)
+			if err := checkKeys(r, rwhere,
+				[]string{"via", "domains", "ips"}, misplaced); err != nil {
+				return err
+			}
 			via := str(r, "via", "")
 			tag, known := c.RouteTargets[via]
 			if !known {
@@ -1120,4 +1133,52 @@ func (c *Config) AbsPath() string {
 		return c.Path
 	}
 	return c.Path
+}
+
+// checkKeys rejects a key this table does not understand.
+//
+// TOML has no schema, so a key written in the wrong table is not an error —
+// it is simply never read, and the setting silently keeps its default. That
+// failure mode is the worst kind here: `location` on a [[profile]] instead of
+// its [[upstream]] leaves the upstream "outside" while the file plainly says
+// inside, and nothing anywhere disagrees with you.
+//
+// belongsTo names the table a misplaced key would have worked in, so the
+// message can say where to move it rather than only that it is wrong.
+func checkKeys(t map[string]any, where string, allowed []string, belongsTo map[string]string) error {
+	ok := make(map[string]bool, len(allowed))
+	for _, k := range allowed {
+		ok[k] = true
+	}
+	keys := make([]string, 0, len(t))
+	for k := range t {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if ok[k] {
+			continue
+		}
+		if home, known := belongsTo[k]; known {
+			return errf("%s.%s belongs in %s, not here. TOML does not object to a "+
+				"key in the wrong table — it is simply never read, so the setting "+
+				"keeps its default and nothing contradicts what the file says.",
+				where, k, home)
+		}
+		return errf("%s.%s is not a setting this table has. Expected one of: %s",
+			where, k, strings.Join(allowed, ", "))
+	}
+	return nil
+}
+
+// misplaced maps a key to the table it actually belongs in.
+var misplaced = map[string]string{
+	"location":  "[[upstream]]",
+	"dns":       "[[upstream]] (or [dns] for the resolver settings)",
+	"via":       "[[profile.route]]",
+	"domains":   "[[profile.route]]",
+	"ips":       "[[profile.route]]",
+	"base":      "[[profile]]",
+	"policy":    "[[client]]",
+	"server_ip": "[xray.outbound], [xray.fallback] or [[upstream]]",
 }
