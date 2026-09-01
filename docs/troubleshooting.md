@@ -329,6 +329,24 @@ are enabled but the tunnel failed at boot and recovered a minute later, the
 clock was wrong when Xray started: check that `chrony-wait.service` is enabled
 (`systemctl is-enabled chrony-wait`), and consider replacing the CMOS battery.
 
+If every unit is enabled and running — `gw status` even says the tunnel is up —
+and no client can reach anything, the policy rules are what to look at:
+
+```bash
+ip rule list | grep 'lookup 100'  # the fwmark rule; missing = TPROXY never delivers
+ip route show table 100           # should be 'local default dev lo'
+```
+
+Missing rules on a box where `gw apply` reliably fixes it means something
+removed them *after* `gw-network` installed them. `systemd-networkd` is the
+usual culprit: it deletes routing policy rules it did not configure itself, and
+it starts after `gw-network` does. `/etc/systemd/networkd.conf.d/99-gateway.conf`
+turns that off — `gw diff` says if it is missing from the box. The watchdog also
+re-applies the rules on its own within a probe interval now, logging
+`re-applying policy routing and the ruleset`, so `journalctl -b -t gw-health`
+tells you whether it had to. The journal is persistent, so `journalctl -b -1`
+reaches the boot that actually failed rather than the one you are debugging on.
+
 If `gw-network` failed at boot, the firewall never loaded — meaning no
 interception *and* no kill switch. `journalctl -b -u gw-network` shows the nft
 error; it is almost always a ruleset referring to something that doesn't exist

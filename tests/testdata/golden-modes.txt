@@ -5,6 +5,7 @@ bootstrap-proxy	644	etc/nftables.d/gateway.nft
 bootstrap-proxy	440	etc/sudoers.d/gw-web
 bootstrap-proxy	644	etc/sysctl.d/99-gateway.conf
 bootstrap-proxy	644	etc/systemd/network/10-gateway-wan.network
+bootstrap-proxy	644	etc/systemd/networkd.conf.d/99-gateway.conf
 bootstrap-proxy	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 bootstrap-proxy	644	etc/systemd/system/gateway.target
 bootstrap-proxy	644	etc/systemd/system/gw-geoupdate.service
@@ -32,6 +33,7 @@ custom-routes	644	etc/nftables.d/gateway.nft
 custom-routes	440	etc/sudoers.d/gw-web
 custom-routes	644	etc/sysctl.d/99-gateway.conf
 custom-routes	644	etc/systemd/network/10-gateway-wan.network
+custom-routes	644	etc/systemd/networkd.conf.d/99-gateway.conf
 custom-routes	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 custom-routes	644	etc/systemd/system/gateway.target
 custom-routes	644	etc/systemd/system/gw-geoupdate.service
@@ -59,6 +61,7 @@ default	644	etc/nftables.d/gateway.nft
 default	440	etc/sudoers.d/gw-web
 default	644	etc/sysctl.d/99-gateway.conf
 default	644	etc/systemd/network/10-gateway-wan.network
+default	644	etc/systemd/networkd.conf.d/99-gateway.conf
 default	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 default	644	etc/systemd/system/gateway.target
 default	644	etc/systemd/system/gw-geoupdate.service
@@ -86,6 +89,7 @@ default-policy-block	644	etc/nftables.d/gateway.nft
 default-policy-block	440	etc/sudoers.d/gw-web
 default-policy-block	644	etc/sysctl.d/99-gateway.conf
 default-policy-block	644	etc/systemd/network/10-gateway-wan.network
+default-policy-block	644	etc/systemd/networkd.conf.d/99-gateway.conf
 default-policy-block	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 default-policy-block	644	etc/systemd/system/gateway.target
 default-policy-block	644	etc/systemd/system/gw-geoupdate.service
@@ -113,6 +117,7 @@ default-policy-direct	644	etc/nftables.d/gateway.nft
 default-policy-direct	440	etc/sudoers.d/gw-web
 default-policy-direct	644	etc/sysctl.d/99-gateway.conf
 default-policy-direct	644	etc/systemd/network/10-gateway-wan.network
+default-policy-direct	644	etc/systemd/networkd.conf.d/99-gateway.conf
 default-policy-direct	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 default-policy-direct	644	etc/systemd/system/gateway.target
 default-policy-direct	644	etc/systemd/system/gw-geoupdate.service
@@ -140,6 +145,7 @@ exit-node-direct	644	etc/nftables.d/gateway.nft
 exit-node-direct	440	etc/sudoers.d/gw-web
 exit-node-direct	644	etc/sysctl.d/99-gateway.conf
 exit-node-direct	644	etc/systemd/network/10-gateway-wan.network
+exit-node-direct	644	etc/systemd/networkd.conf.d/99-gateway.conf
 exit-node-direct	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 exit-node-direct	644	etc/systemd/system/gateway.target
 exit-node-direct	644	etc/systemd/system/gw-geoupdate.service
@@ -167,6 +173,7 @@ exit-node-profile	644	etc/nftables.d/gateway.nft
 exit-node-profile	440	etc/sudoers.d/gw-web
 exit-node-profile	644	etc/sysctl.d/99-gateway.conf
 exit-node-profile	644	etc/systemd/network/10-gateway-wan.network
+exit-node-profile	644	etc/systemd/networkd.conf.d/99-gateway.conf
 exit-node-profile	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 exit-node-profile	644	etc/systemd/system/gateway.target
 exit-node-profile	644	etc/systemd/system/gw-geoupdate.service
@@ -194,6 +201,7 @@ ipv6-pass-no-clients	644	etc/nftables.d/gateway.nft
 ipv6-pass-no-clients	440	etc/sudoers.d/gw-web
 ipv6-pass-no-clients	644	etc/sysctl.d/99-gateway.conf
 ipv6-pass-no-clients	644	etc/systemd/network/10-gateway-wan.network
+ipv6-pass-no-clients	644	etc/systemd/networkd.conf.d/99-gateway.conf
 ipv6-pass-no-clients	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 ipv6-pass-no-clients	644	etc/systemd/system/gateway.target
 ipv6-pass-no-clients	644	etc/systemd/system/gw-geoupdate.service
@@ -223,6 +231,7 @@ jobs	644	etc/nftables.d/gateway.nft
 jobs	440	etc/sudoers.d/gw-web
 jobs	644	etc/sysctl.d/99-gateway.conf
 jobs	644	etc/systemd/network/10-gateway-wan.network
+jobs	644	etc/systemd/networkd.conf.d/99-gateway.conf
 jobs	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 jobs	644	etc/systemd/system/gateway.target
 jobs	644	etc/systemd/system/gw-geoupdate.service
@@ -253,6 +262,7 @@ no-tailscale	644	etc/nftables.d/gateway.nft
 no-tailscale	440	etc/sudoers.d/gw-web
 no-tailscale	644	etc/sysctl.d/99-gateway.conf
 no-tailscale	644	etc/systemd/network/10-gateway-wan.network
+no-tailscale	644	etc/systemd/networkd.conf.d/99-gateway.conf
 no-tailscale	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 no-tailscale	644	etc/systemd/system/gateway.target
 no-tailscale	644	etc/systemd/system/gw-geoupdate.service
@@ -278,6 +288,7 @@ no-web	644	etc/cron.d/gw-jobs
 no-web	644	etc/nftables.d/gateway.nft
 no-web	644	etc/sysctl.d/99-gateway.conf
 no-web	644	etc/systemd/network/10-gateway-wan.network
+no-web	644	etc/systemd/networkd.conf.d/99-gateway.conf
 no-web	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 no-web	644	etc/systemd/system/gateway.target
 no-web	644	etc/systemd/system/gw-geoupdate.service
@@ -304,6 +315,7 @@ profiles	644	etc/nftables.d/gateway.nft
 profiles	440	etc/sudoers.d/gw-web
 profiles	644	etc/sysctl.d/99-gateway.conf
 profiles	644	etc/systemd/network/10-gateway-wan.network
+profiles	644	etc/systemd/networkd.conf.d/99-gateway.conf
 profiles	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 profiles	644	etc/systemd/system/gateway.target
 profiles	644	etc/systemd/system/gw-geoupdate.service
@@ -331,6 +343,7 @@ reality-fallback	644	etc/nftables.d/gateway.nft
 reality-fallback	440	etc/sudoers.d/gw-web
 reality-fallback	644	etc/sysctl.d/99-gateway.conf
 reality-fallback	644	etc/systemd/network/10-gateway-wan.network
+reality-fallback	644	etc/systemd/networkd.conf.d/99-gateway.conf
 reality-fallback	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 reality-fallback	644	etc/systemd/system/gateway.target
 reality-fallback	644	etc/systemd/system/gw-geoupdate.service
@@ -358,6 +371,7 @@ trojan-upstream	644	etc/nftables.d/gateway.nft
 trojan-upstream	440	etc/sudoers.d/gw-web
 trojan-upstream	644	etc/sysctl.d/99-gateway.conf
 trojan-upstream	644	etc/systemd/network/10-gateway-wan.network
+trojan-upstream	644	etc/systemd/networkd.conf.d/99-gateway.conf
 trojan-upstream	644	etc/systemd/system/AdGuardHome.service.d/gw.conf
 trojan-upstream	644	etc/systemd/system/gateway.target
 trojan-upstream	644	etc/systemd/system/gw-geoupdate.service

@@ -430,6 +430,22 @@ Boot order matters here and is enforced:
    and a resolver that caches those failures serves them to the LAN until the
    negative TTL expires.
 
+`systemd-networkd` deletes every routing policy rule it did not configure
+itself when it starts, and it starts *after* `gw-network` — which is where the
+fwmark rule comes from. A drop-in at `/etc/systemd/networkd.conf.d/99-gateway.conf`
+turns that off (`ManageForeignRoutingPolicyRules=no`). Without it the rules are
+installed correctly at boot and removed seconds later, and the box comes up with
+the ruleset loaded, Xray listening, the tunnel genuinely up, and not one
+intercepted packet reaching it.
+
+If the diversion layer is lost anyway, the watchdog now puts it back rather than
+waiting to be told. A failing probe alongside a *succeeding* SOCKS probe means
+Xray is healthy and the path into it is not, so it re-runs `ip-rules.sh up` and
+reloads the ruleset — once per outage, re-armed on recovery. That is the same
+repair `gw apply` performs, minus apply's `gw-network` restart: that unit's
+`ExecStop` deletes the table, and for the moment between stop and start the
+killswitch does not exist.
+
 `tailscaled` is *Wanted* by the target but deliberately **not** `PartOf` it, so
 `gw restart` can't drop the Tailscale session you're using to run it.
 

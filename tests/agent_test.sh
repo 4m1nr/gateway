@@ -102,11 +102,16 @@ esac
 exit 0
 IP
 
-  # nft: records the ruleset it is handed, including rules fed on stdin.
+  # nft: records the ruleset it is handed, whether that is a file or rules fed
+  # on stdin. Both are real: ts-bypass.sh pipes rules in, the watchdog's repair
+  # reloads the ruleset file gw-network loads at boot.
   cat > "$W/bin/nft" <<NFT
 #!/usr/bin/env bash
 echo "nft \$*" >> "$W/calls"
-[ "\$1" = "-f" ] && cat >> "$W/nft"
+if [ "\$1" = "-f" ]; then
+  if [ "\${2:-}" = "-" ] || [ -z "\${2:-}" ]; then cat >> "$W/nft"
+  else cat "\$2" >> "$W/nft"; fi
+fi
 exit 0
 NFT
 
@@ -182,12 +187,25 @@ echo "ts-bypass \$*" >> "$W/calls"
 exit 0
 TS
 
-  chmod +x "$W"/bin/* "$W/lib/gateway/ts-bypass.sh"
+  # ip-rules stand-in for the health tests: the repair path re-applies policy
+  # routing through it, and what matters here is that it was asked to. The real
+  # script has its own tests below.
+  cat > "$W/lib/gateway/ip-rules.sh" <<IPR
+#!/usr/bin/env bash
+echo "ip-rules \$*" >> "$W/calls"
+[ -f "$W/ip-rules-fails" ] && exit 1
+exit 0
+IPR
+
+  # The ruleset gw-network loads at boot, which the repair reloads.
+  printf 'table inet gateway {}\n' > "$W/gateway.nft"
+
+  chmod +x "$W"/bin/* "$W/lib/gateway/ts-bypass.sh" "$W/lib/gateway/ip-rules.sh"
 }
 
 run_health() {
   ( export PATH="$W/bin:$PATH" GW_LIB="$W/lib/gateway" GW_STATE="$W/state" \
-           GW_CONNTRACK="$W/netfilter"
+           GW_CONNTRACK="$W/netfilter" GW_NFT_FILE="$W/gateway.nft"
     bash templates/lib/health.sh ) > "$W/out" 2>&1
 }
 
@@ -256,6 +274,68 @@ if grep -q "INTERCEPTION BROKEN" "$W/log"; then
   ok "interception failure is logged at a different level from an outage"
 else
   bad "a degraded gateway logged nothing distinguishable"
+fi
+
+# --------------------------------------------------- the diversion repair --
+
+# The failure this exists for: the box comes back from a power cut with Xray
+# running and the tunnel genuinely up, and not one intercepted packet reaching
+# it, because whatever steers them — the fwmark rule, the local route, the
+# ruleset — is gone. Restarting Xray cannot fix that, and `gw apply` can, which
+# is why "just run gw apply" became the folk remedy. The watchdog already
+# diagnoses it; this is it acting on the diagnosis.
+setup degraded-repair
+echo fail > "$W/probe-direct"; echo ok > "$W/probe-socks"
+run_health
+if called "ip-rules up" && called "nft -f"; then
+  ok "broken interception re-applies the policy rules and the ruleset"
+else
+  bad "a degraded gateway was left with whatever broke its policy routing"
+fi
+
+# Not via `systemctl restart gw-network`, which is how apply does it: its
+# ExecStop deletes the table, and for the window between stop and start the
+# forward chain — and with it the killswitch — does not exist, so a proxied
+# client's traffic would reach the router and be NATed straight out.
+if ! called "systemctl restart gw-network"; then
+  ok "and without a window where the killswitch does not exist"
+else
+  bad "the repair restarts gw-network, dropping the killswitch while it runs"
+fi
+
+# Once per outage. If re-applying was not the fix, repeating it every cycle
+# buries the real fault under its own log lines.
+setup repair-once
+echo fail > "$W/probe-direct"; echo ok > "$W/probe-socks"
+echo 1 > "$W/state/repaired"
+run_health
+if ! called "ip-rules up"; then
+  ok "the repair runs once per outage, not on every cycle of one"
+else
+  bad "the repair re-runs on every probe while the gateway stays degraded"
+fi
+
+# And is armed again by a recovery, or a box that breaks the same way twice is
+# only ever fixed the first time.
+setup repair-rearm
+echo 1 > "$W/state/repaired"
+run_health
+if [ "$(state tunnel)" = up ] && [ "$(state repaired)" = 0 ]; then
+  ok "a recovery re-arms the repair for the next outage"
+else
+  bad "the repair stays spent after the gateway recovers"
+fi
+
+# An ordinary outage is a different fault: nothing reaches the internet by any
+# path, and reloading the ruleset would be a guess with the killswitch as the
+# stake.
+setup down-no-repair
+echo fail > "$W/probe-direct"; echo fail > "$W/probe-socks"
+run_health
+if ! called "ip-rules up"; then
+  ok "a tunnel that is simply down does not get its policy routing rewritten"
+else
+  bad "an ordinary outage triggered the interception repair"
 fi
 
 # ----------------------------------------------------------- the restart --

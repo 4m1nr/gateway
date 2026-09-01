@@ -1,6 +1,8 @@
 #!/bin/bash
-# Tunnel watchdog. Escalates: probe -> restart Xray -> (balancer handles
-# failover) -> engage the Tailscale lifeline so remote admin survives.
+# Tunnel watchdog. Escalates: probe -> re-apply the diversion layer (only when
+# the tunnel is up and the traffic is not reaching it) -> restart Xray ->
+# (balancer handles failover) -> engage the Tailscale lifeline so remote admin
+# survives.
 #
 # It never opens a direct path for client traffic. A broken tunnel stays
 # fail-closed; the only thing the lifeline frees is tailscaled itself.
@@ -15,6 +17,11 @@ STATE="${GW_STATE:-/run/gateway}"
 mkdir -p "$STATE"
 FAILS=$(cat "$STATE/fails" 2>/dev/null || echo 0)
 LIFELINE=$(cat "$STATE/lifeline" 2>/dev/null || echo 0)
+REPAIRED=$(cat "$STATE/repaired" 2>/dev/null || echo 0)
+
+# The ruleset gw-network loads at boot, re-loaded from here when the diversion
+# layer is what broke. Overridable for the same reason the paths above are.
+NFT_FILE="${GW_NFT_FILE:-/etc/nftables.d/gateway.nft}"
 
 log() { logger -t gw-health -p "daemon.$1" "$2"; }
 
@@ -45,6 +52,36 @@ lifeline_off() {
   echo 0 > "$STATE/lifeline"
   systemctl try-restart tailscaled >/dev/null 2>&1
   log notice "tunnel recovered — Tailscale lifeline released"
+}
+
+# Re-apply everything that steers packets into Xray.
+#
+# `degraded` says Xray and the tunnel are fine and the traffic is not reaching
+# them, and every mechanism that steers it — the fwmark rule, the local route in
+# table $RT_TABLE, rp_filter/accept_local, the ruleset itself — is installed by
+# gw-network at boot and re-applied by `gw apply`. That is the whole reason
+# "just run gw apply" fixes a gateway that came back from a power cut dead:
+# apply's last act is restarting gw-network. Doing it here means the box
+# recovers on its own within a probe interval instead of waiting for someone to
+# notice, which on a box whose only reboots are power cuts is the difference
+# between a blip and an evening offline.
+#
+# Deliberately not `systemctl restart gw-network`. Its ExecStop deletes the
+# table, so between stop and start the forward chain does not exist — and with
+# it the killswitch: a proxied client's packets would be forwarded to the
+# router, which NATs them straight out with the real address. Re-running what
+# ExecStart runs has no such window. ip-rules.sh up is idempotent by
+# construction, and the ruleset file opens with add-then-delete so the table is
+# replaced in one atomic nft transaction.
+#
+# Once per episode, not once per cycle: if this was not the fault, repeating it
+# every $INTERVAL seconds buries the real one under its own noise.
+repair_diversion() {
+  [ "$REPAIRED" = 1 ] && return 0
+  echo 1 > "$STATE/repaired"
+  log err "re-applying policy routing and the ruleset — the tunnel is up, so what broke is the path into it"
+  "$GW_LIB/ip-rules.sh" up || log err "ip-rules.sh up failed — check 'ip rule list' by hand"
+  nft -f "$NFT_FILE" || log err "reloading $NFT_FILE failed — check 'nft -c -f $NFT_FILE'"
 }
 
 # The probe that matters: a plain request, which the output chain marks and
@@ -146,6 +183,9 @@ fi
 if [ "$STATUS" = up ]; then
   [ "$FAILS" -gt 0 ] && log notice "gateway healthy again after $FAILS failed probe(s)"
   echo 0 > "$STATE/fails"
+  # Armed again for the next episode: the repair is once per outage, not once
+  # per boot, or a box that breaks the same way twice is only ever fixed once.
+  echo 0 > "$STATE/repaired"
   lifeline_off
   exit 0
 fi
@@ -154,6 +194,10 @@ FAILS=$((FAILS + 1))
 echo "$FAILS" > "$STATE/fails"
 if [ "$STATUS" = degraded ]; then
   log err "INTERCEPTION BROKEN ($FAILS): $DETAIL"
+  # Before the escalation below, and without waiting for it. Restarting Xray
+  # cannot fix a missing ip rule, and it drops every live connection on the way
+  # to not fixing it.
+  repair_diversion
 else
   log warning "gateway probe failed ($FAILS): $DETAIL"
 fi

@@ -109,11 +109,19 @@ chronyc makestep >/dev/null 2>&1 || true
 systemctl enable chrony-wait.service 2>/dev/null \
   || warn "chrony-wait.service unavailable — Xray may start before the clock is correct"
 
-info "capping the journal (thin-client flash is small and slow)"
+info "capping the journal, and keeping it across reboots"
 JMAX=$(sed -n 's/^journal_max_use *= *"\(.*\)"/\1/p' "$CONFIG" | head -1)
 install -d /etc/systemd/journald.conf.d
+# Storage=persistent, deliberately, on a box whose flash is small and slow.
+# Debian's default is Storage=auto with no /var/log/journal, which means the
+# journal lives in tmpfs and every boot erases the one before it. The faults
+# worth debugging here are boot faults — the box comes back from a power cut
+# with the tunnel dead — and with a volatile journal the reboot you need to
+# investigate is the same event that destroys the evidence. `journalctl -b -1`
+# is the whole point. SystemMaxUse bounds what it costs.
 cat > /etc/systemd/journald.conf.d/99-gateway.conf <<CONF
 [Journal]
+Storage=persistent
 SystemMaxUse=${JMAX:-200M}
 RuntimeMaxUse=64M
 CONF

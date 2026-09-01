@@ -88,6 +88,15 @@ func Build(c *config.Config, opt Options) ([]File, error) {
 	}
 	contents["etc/systemd/network/10-gateway-wan.network"] = network
 
+	// Ordering makes this necessary rather than optional: gw-network adds the
+	// policy rules before network-pre.target, and networkd deletes every rule
+	// it did not configure when it starts, which is after that.
+	networkd, err := templateFile("systemd-dropin/networkd-gw.conf")
+	if err != nil {
+		return nil, err
+	}
+	contents["etc/systemd/networkd.conf.d/99-gateway.conf"] = networkd
+
 	xray, err := RenderXray(c)
 	if err != nil {
 		return nil, err
