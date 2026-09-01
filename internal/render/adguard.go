@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/am1nr/gateway/internal/adguard"
 	"github.com/am1nr/gateway/internal/config"
 	"github.com/am1nr/gateway/internal/jsonx"
 )
@@ -76,13 +77,24 @@ func AdGuardOverrides(c *config.Config) *jsonx.Object {
 
 	persistent := []any{}
 	for _, cl := range c.Clients {
+		// A "direct" device is one the gateway deliberately does not touch, so
+		// its DNS is not filtered either.
+		//
+		// Both keys, not just the second one: AdGuard reads a client's own
+		// filtering settings only when the client is not using the global ones
+		// ("if !c.UseOwnSettings { return }", where UseOwnSettings is the
+		// negation of this key). Sending use_global_settings: true alongside
+		// filtering_enabled: false asks for an opt-out and gets the global
+		// setting, silently.
+		filtered := cl.Policy != "direct"
 		persistent = append(persistent, obj(
 			"name", cl.Name,
 			"ids", arr(cl.IP),
 			"tags", []any{},
-			"use_global_settings", true,
+			"uid", adguard.ClientUID(cl.IP),
+			"use_global_settings", filtered,
 			"use_global_blocked_services", true,
-			"filtering_enabled", cl.Policy != "direct",
+			"filtering_enabled", filtered,
 			"safebrowsing_enabled", false,
 			"parental_enabled", false,
 			"blocked_services", obj(

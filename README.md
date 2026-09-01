@@ -570,6 +570,13 @@ when you need it. Client traffic stays fail-closed regardless.
 - **AdGuard's admin password** is the one thing not managed here — a password
   hash doesn't belong in a git repo. Set it in the web UI; `gw apply` leaves it
   and anything else you set there alone.
+- **Every `[[client]]` also appears in AdGuard**, by name, so the query log
+  reads in device names rather than addresses. The gateway owns a client's
+  identity there — its name and the address it is keyed to, both from
+  gateway.toml — and nothing else: blocked services, its own upstreams, tags,
+  safe search, anything you set against that device in the web UI survives
+  `gw apply`. The filtering toggle a `direct` policy implies is a starting
+  value, set when the client is first created, not re-asserted afterwards.
 
 ## Layout
 

@@ -322,6 +322,12 @@ statslog_days = 7
 #
 #  Give listed devices a static IP (or a router DHCP reservation) — policy is
 #  keyed to the address.
+#
+#  Listed devices also appear in AdGuard Home by name, so its query log reads
+#  in device names. `name` must be unique: AdGuard treats it as an identifier
+#  and refuses to start on a duplicate, which would take the LAN's DNS down.
+#  Whatever you then set against that device in the AdGuard UI — blocked
+#  services, its own upstreams, tags — stays put across `gw apply`.
 # ============================================================================
 
 [policy]

@@ -178,6 +178,20 @@ func TestValidationRejects(t *testing.T) {
 			"policy.default must be one of",
 		},
 		{
+			// AdGuard Home treats a persistent client's name as an identifier
+			// and refuses to start on a duplicate, which takes the LAN's DNS
+			// down with the resolver.
+			"two clients with the same name",
+			"[[client]]\nip = \"192.168.1.31\"\nname = \"tv\"\n" +
+				"[[client]]\nip = \"192.168.1.32\"\nname = \"tv\"",
+			"duplicate client name",
+		},
+		{
+			"client with a blank name",
+			"[[client]]\nip = \"192.168.1.31\"\nname = \"\"",
+			"name is empty",
+		},
+		{
 			"web allow_cidrs of everything",
 			"[web]\nallow_cidrs = [\"0.0.0.0/0\"]",
 			"List real networks",

@@ -796,6 +796,12 @@ func (c *Config) parseClients(raw map[string]any) error {
 		return err
 	}
 	seen := map[string]bool{}
+	// Names are checked as strictly as addresses because AdGuard Home treats a
+	// persistent client's name as an identifier: it refuses to start on an
+	// empty or duplicate one, and a resolver that will not start takes the
+	// LAN's DNS with it. Rejecting the config here costs one apply; finding out
+	// on the box costs the network.
+	seenName := map[string]bool{}
 	for i, cl := range entries {
 		where := fmt.Sprintf("client[%d]", i)
 		ipStr, err := needString(cl, "ip", where)
@@ -821,8 +827,22 @@ func (c *Config) parseClients(raw map[string]any) error {
 			return errf("%s: %s is the gateway or the router itself", where, ipStr)
 		}
 		seen[ipStr] = true
+
+		// The address is the fallback name, so an entry without one is fine;
+		// an entry with an explicitly blank one is not.
+		name := str(cl, "name", ipStr)
+		if strings.TrimSpace(name) == "" {
+			return errf("%s: name is empty. Omit the key to use %s as the name — "+
+				"AdGuard Home will not start with an unnamed client", where, ipStr)
+		}
+		if seenName[name] {
+			return errf("%s: duplicate client name %q. AdGuard Home will not "+
+				"start with two clients of the same name", where, name)
+		}
+		seenName[name] = true
+
 		c.Clients = append(c.Clients, Client{
-			IP: ipStr, Name: str(cl, "name", ipStr), Policy: policy,
+			IP: ipStr, Name: name, Policy: policy,
 		})
 	}
 	return nil

@@ -61,7 +61,8 @@
           "192.168.1.60"
         ],
         "tags": [],
-        "use_global_settings": true,
+        "uid": "e23d6d25-5339-822f-9999-e91ae08efbf0",
+        "use_global_settings": false,
         "use_global_blocked_services": true,
         "filtering_enabled": false,
         "safebrowsing_enabled": false,
@@ -82,6 +83,7 @@
           "192.168.1.99"
         ],
         "tags": [],
+        "uid": "09f92428-c037-81e5-8d37-88e5a17b98a4",
         "use_global_settings": true,
         "use_global_blocked_services": true,
         "filtering_enabled": true,
@@ -103,6 +105,7 @@
           "192.168.1.70"
         ],
         "tags": [],
+        "uid": "f3338ef3-4291-89a1-b298-7b82ce02c05e",
         "use_global_settings": true,
         "use_global_blocked_services": true,
         "filtering_enabled": true,
@@ -124,6 +127,7 @@
           "192.168.1.71"
         ],
         "tags": [],
+        "uid": "a9e652ba-5ff1-8264-b065-d22ec54c5859",
         "use_global_settings": true,
         "use_global_blocked_services": true,
         "filtering_enabled": true,

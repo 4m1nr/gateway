@@ -19,6 +19,11 @@ import (
 // Maps are merged recursively; lists are replaced wholesale. A half-merged
 // upstream list is worse than either version — it would mix the old resolvers
 // with the new, and the result is a set nobody chose.
+//
+// clients.persistent is the one exception, joined entry by entry rather than
+// replaced. See reconcileClients: a client's settings and the gateway's own
+// fields share one list entry, so replacing the list would discard everything
+// a person had configured against that device.
 func Merge(path string, overrides map[string]any) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -42,6 +47,10 @@ func Merge(path string, overrides map[string]any) error {
 	if err := os.WriteFile(path+".bak", raw, 0o600); err != nil {
 		return fmt.Errorf("writing the backup: %w", err)
 	}
+
+	// Before the merge, and against the file as it is on disk: this is the one
+	// list whose old contents are part of the answer.
+	reconcileClients(current, overrides)
 
 	merged := deepMerge(current, overrides)
 	out, err := yaml.Marshal(merged)
