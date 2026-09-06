@@ -133,6 +133,10 @@ default = "proxy"   # everything, unless listed below
 
 `gw client add` still works the same way, for the exceptions.
 
+Converting a box that is **already running** is its own procedure, because
+there are devices depending on it while you work:
+[docs/two-armed-migration.md](docs/two-armed-migration.md).
+
 ### Configuring it
 
 `gw init` asks when it finds a second card. To convert an existing config by
@@ -682,6 +686,11 @@ when you need it. Client traffic stays fail-closed regardless.
 - **A single NIC** means bypassed traffic hairpins through one port. Fine at
   home speeds; ICMP redirects are disabled so clients can't be told to skip the
   box. With [two cards](#two-network-cards) it does not hairpin at all.
+- **The checkout on the box is the deployment.** `git pull` is how a fix gets
+  there, `gw status` compares the running binary against it, and nothing
+  tracked should be deleted from it — `scripts/cleanup.sh` reclaims the ~130 MB
+  of `dashboard/node_modules` and other untracked build leftovers, and refuses
+  to touch anything git knows about.
 - **Renumbering takes effect on `gw apply`.** Installing a `.network` file tells
   networkd nothing on its own, and when it does re-read one it adds the new
   address and keeps the old — so changing `static_ip` used to leave the card
@@ -716,11 +725,13 @@ dashboard/            the dashboard's source (React); dist/ is committed
 internal/check/       `gw check` — end-to-end verification
 internal/diag/        status, diag, trace, history, bench
 templates/            nftables, systemd units, runtime helper scripts
-scripts/              ordered, idempotent install steps
+scripts/              ordered, idempotent install steps, plus deadman.sh
+                      (unattended rollback) and cleanup.sh (reclaim disk)
 vendor/               vendored Go dependencies, so the box builds offline
 build/                rendered output, mirrors the target filesystem
 tests/                fixtures, frozen golden output, and run.sh for the shell
-docs/                 recovery, troubleshooting, per-client policy
+docs/                 recovery, troubleshooting, per-client policy,
+                      converting a running box to two cards
 ```
 
 The gateway is a single static Go binary. Dependencies are vendored, so a box
