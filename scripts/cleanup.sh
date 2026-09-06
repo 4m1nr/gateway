@@ -44,7 +44,10 @@ GOCACHE_TOO=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run|-n) DRY=1 ;;
-    --yes|-y)     GW_YES=1 ;;
+    # Exported because confirm() reads it, and confirm() lives in
+    # lib/common.sh — sourced through a path computed at runtime, which is
+    # also why shellcheck cannot see the use and calls this unused.
+    --yes|-y)     export GW_YES=1 ;;
     --gc)         GC=1 ;;
     --go-cache)   GOCACHE_TOO=1 ;;
     -h|--help)    sed -n '2,7p' "$_self"; exit 0 ;;

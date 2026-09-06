@@ -180,6 +180,24 @@ for f in scripts/*.sh templates/lib/*.sh lib/common.sh; do
 done
 
 echo
+echo "== shellcheck =="
+# Byte-for-byte the command the CI job blocks on. Mirrored here because a gate
+# that exists only in CI is one you find out about after pushing, and these
+# scripts run as root on a box that is someone's only route to the internet —
+# the warnings are worth catching before the commit, not after.
+if command -v shellcheck >/dev/null 2>&1; then
+  if out=$(shellcheck --severity=warning --shell=bash \
+             lib/common.sh scripts/*.sh templates/lib/*.sh tests/run.sh 2>&1); then
+    ok "clean at warning level"
+  else
+    bad "shellcheck found what CI will block on:"
+    printf '%s\n' "$out" | sed 's/^/      /'
+  fi
+else
+  printf '  - shellcheck is not installed; skipping (CI still runs it)\n'
+fi
+
+echo
 echo "== every helper a script invokes is actually rendered =="
 # scripts/20-adguard.sh called lib/agh_merge.py for a while after that file was
 # deleted, and scripts/10-xray.sh called geoupdate.sh after it became Go. Both
