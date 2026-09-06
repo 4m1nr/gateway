@@ -182,10 +182,45 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 	directElems := append(c.ClientsBy("direct"), tailnetIf(c.TailnetDirect())...)
 	blockedElems := append(c.ClientsBy("block"), tailnetIf(c.TailnetBlocked())...)
 
+	// Two-armed: the LAN has its own card, and the router is on the far side of
+	// the box rather than beside it. Both facts change rules below.
+	defineLANIf, spoofGuard := "", ""
+	if c.TwoArm {
+		defineLANIf = fmt.Sprintf("define LAN_IF      = %q\n", c.LANIf)
+		spoofGuard = "\n" +
+			"        # Nothing on the internet side can legitimately claim a LAN\n" +
+			"        # source. Without this a forged packet arriving on $WAN is read\n" +
+			"        # by every source-based rule below as if it came from the office\n" +
+			"        # — including the interception itself.\n" +
+			"        iifname $WAN ip saddr $LAN counter drop comment \"wan-spoofed-lan\"\n"
+	}
+
+	// Under wan_dhcp the uplink gateway comes from the lease, so there is no
+	// address to define here. Nothing below needs one: the router only ever
+	// appeared as a source that must not be intercepted, and two-armed it is
+	// not on the LAN to be caught in the first place.
+	defineRouter := fmt.Sprintf("define ROUTER      = %s\n", c.Router)
+	selfOrRouter := "        # Neither of these ever forwards traffic through us, but they are inside\n" +
+		"        # $LAN and so would otherwise be caught by the catch-all below.\n" +
+		"        ip saddr { $BOX, $ROUTER } counter return comment \"self-or-router\"\n"
+	if c.TwoArm {
+		selfOrRouter = "        # The box never forwards traffic through itself, but it is inside\n" +
+			"        # $LAN and so would otherwise be caught by the catch-all below. The\n" +
+			"        # router is on the $WAN side here, so it can never match this.\n" +
+			"        ip saddr $BOX counter return comment \"self\"\n"
+		if c.WANDHCP {
+			defineRouter = "# No ROUTER define: net.wan_dhcp is on, so the uplink gateway comes from\n" +
+				"# the lease and is not known when this file is generated. Nothing below\n" +
+				"# needs it — the router is not on the LAN, so it is never a source here.\n"
+		}
+	}
+
 	return subst(tpl, map[string]string{
 		"CONFIG_PATH":   c.Path,
 		"GENERATED_AT":  generatedAt.Format("2006-01-02T15:04:05-07:00"),
 		"WAN_IF":        c.WANIf,
+		"DEFINE_LAN_IF": defineLANIf,
+		"DEFINE_ROUTER": defineRouter,
 		"LAN_CIDR":      c.LANCidr,
 		"BOX_IP":        c.BoxIP,
 		"ROUTER":        c.Router,
@@ -220,6 +255,8 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 		"INPUT_SSH":           sshRule,
 		"INPUT_UI":            uiRule,
 		"INPUT_WEB":           webRule,
+		"WAN_SPOOF_GUARD":     spoofGuard,
+		"SELF_OR_ROUTER":      selfOrRouter,
 	})
 }
 
@@ -236,12 +273,23 @@ func Sysctl(c *config.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Both cards, two-armed. The LAN one matters most: it is the card clients
+	// are on, so it is the one a Router Advertisement would reach them through.
+	ifaces := []string{c.WANIf}
+	if c.TwoArm {
+		ifaces = append(ifaces, c.LANIf)
+	}
+
 	var v6 string
 	if c.IPv6Mode == "off" {
+		var disable string
+		for _, iface := range ifaces {
+			disable += fmt.Sprintf("net.ipv6.conf.%s.disable_ipv6 = 1\n", iface) +
+				fmt.Sprintf("net.ipv6.conf.%s.accept_ra = 0\n", iface)
+		}
 		v6 = "# IPv6 off on the LAN side only. A blanket all.disable_ipv6 would\n" +
 			"# break Tailscale, which uses IPv6 for its own tailnet addressing.\n" +
-			fmt.Sprintf("net.ipv6.conf.%s.disable_ipv6 = 1\n", c.WANIf) +
-			fmt.Sprintf("net.ipv6.conf.%s.accept_ra = 0\n", c.WANIf) +
+			disable +
 			"\n" +
 			"# IPv6 forwarding stays ON even with IPv6 off on the LAN, and it is\n" +
 			"# the tailnet that needs it. `--advertise-exit-node` advertises\n" +
@@ -254,7 +302,7 @@ func Sysctl(c *config.Config) (string, error) {
 			"# drops IPv6 everywhere except from tailscale0, so leaving the\n" +
 			"# kernel knob off meant the two disagreed, with the kernel\n" +
 			"# silently winning. The LAN side cannot leak either way, because\n" +
-			fmt.Sprintf("# %s has no IPv6 at all.\n", c.WANIf) +
+			fmt.Sprintf("# %s.\n", noIPv6Note(ifaces)) +
 			"net.ipv6.conf.all.forwarding = 1\n" +
 			"net.ipv6.conf.default.forwarding = 1\n"
 	} else {
@@ -266,12 +314,37 @@ func Sysctl(c *config.Config) (string, error) {
 		bbr = "net.core.default_qdisc = fq\n" +
 			"net.ipv4.tcp_congestion_control = bbr\n"
 	}
+	lanRP := ""
+	redirects := "# Single-NIC gateway: clients and the router share a segment, so without this\n" +
+		"# the box sends ICMP redirects telling clients to bypass it entirely.\n"
+	if c.TwoArm {
+		lanRP = fmt.Sprintf("net.ipv4.conf.%s.rp_filter = 0\n", c.LANIf)
+		redirects = "# The LAN and the uplink are separate segments here, so the box has no\n" +
+			"# reason to redirect anyone. It is still off: a second router appearing on\n" +
+			"# the office LAN would give it one, and a client that takes the hint has\n" +
+			"# left the tunnel without anything here saying so.\n"
+	}
+
 	return subst(tpl, map[string]string{
 		"WAN_IF": c.WANIf, "IPV6_SYSCTL": v6, "BBR_SYSCTL": bbr,
+		"LAN_RP_FILTER": lanRP, "REDIRECTS_NOTE": redirects,
 	})
 }
 
+// noIPv6Note reads correctly for one card or two.
+func noIPv6Note(ifaces []string) string {
+	if len(ifaces) == 1 {
+		return ifaces[0] + " has no IPv6 at all"
+	}
+	return strings.Join(ifaces, " and ") + " have no IPv6 at all"
+}
+
 // Network renders the systemd-networkd unit for the WAN interface.
+//
+// Single-armed this is the only unit and the only card, so its address is the
+// one the whole LAN points at. Two-armed it describes the uplink alone, and the
+// address may not be here at all: an office hands one out by DHCP, and
+// net.wan_dhcp says to take it.
 func Network(c *config.Config) (string, error) {
 	tpl, err := templateFile("wan.network.tmpl")
 	if err != nil {
@@ -281,10 +354,54 @@ func Network(c *config.Config) (string, error) {
 	if c.IPv6Mode == "off" {
 		v6 = "IPv6AcceptRA=no\nLinkLocalAddressing=no\n"
 	}
+
+	addressing := fmt.Sprintf("Address=%s/%d\nGateway=%s\n",
+		c.WANIP, c.WANPrefixLen, c.Router)
+	dhcp := ""
+	if c.WANDHCP {
+		addressing = "DHCP=ipv4\n"
+		// UseDNS=no is the load-bearing line. The lease names the office's own
+		// resolver, and networkd would hand it to resolved ahead of the DNS=
+		// above — leaving the box resolving around AdGuard, unfiltered and
+		// unsplit, with nothing obviously wrong.
+		dhcp = "\n[DHCPv4]\n" +
+			"UseDNS=no\n" +
+			"UseDomains=no\n"
+	}
+
 	return subst(tpl, map[string]string{
+		"WAN_IF":           c.WANIf,
+		"WAN_ADDRESSING":   addressing,
+		"WAN_DHCP_SECTION": dhcp,
+		"BOX_IP":           c.BoxIP,
+		"ROUTER":           c.Router,
+		"PREFIX_LEN":       strconv.Itoa(c.PrefixLen),
+		"IPV6_NETWORK":     v6,
+	})
+}
+
+// NetworkLAN renders the unit for the LAN-facing card, and returns "" when
+// there is only one card to face anything with.
+//
+// No Gateway= and no DHCP server: the box is the LAN's default route, and
+// whatever already serves DHCP on that segment keeps doing it — it just has to
+// advertise this box as the gateway and the resolver.
+func NetworkLAN(c *config.Config) (string, error) {
+	if !c.TwoArm {
+		return "", nil
+	}
+	tpl, err := templateFile("lan.network.tmpl")
+	if err != nil {
+		return "", err
+	}
+	v6 := "IPv6AcceptRA=yes\n"
+	if c.IPv6Mode == "off" {
+		v6 = "IPv6AcceptRA=no\nLinkLocalAddressing=no\n"
+	}
+	return subst(tpl, map[string]string{
+		"LAN_IF":       c.LANIf,
 		"WAN_IF":       c.WANIf,
 		"BOX_IP":       c.BoxIP,
-		"ROUTER":       c.Router,
 		"PREFIX_LEN":   strconv.Itoa(c.PrefixLen),
 		"IPV6_NETWORK": v6,
 	})
@@ -307,9 +424,14 @@ func Env(c *config.Config, repo string) (string, error) {
 		// flat KEY=value file cannot express without lying about it.
 		{"GEO_MIN_BYTES", strconv.Itoa(c.GeoMinBytes)},
 		{"WAN_IF", c.WANIf},
+		// Empty single-armed, which is how every reader tells the two apart.
+		{"LAN_IF", c.LANIf},
 		{"LAN_CIDR", c.LANCidr},
 		{"BOX_IP", c.BoxIP},
+		// Empty under wan_dhcp: the lease decides, so readers that need it ask
+		// the kernel for the default route instead.
 		{"ROUTER", c.Router},
+		{"WAN_CIDR", c.WANCidr},
 		{"TPROXY_PORT", strconv.Itoa(c.TproxyPort)},
 		{"SOCKS_PORT", strconv.Itoa(c.SocksPort)},
 		{"HTTP_PORT", strconv.Itoa(c.HTTPPort)},

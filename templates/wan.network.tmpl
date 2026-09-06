@@ -3,11 +3,9 @@
 Name={{WAN_IF}}
 
 [Network]
-Address={{BOX_IP}}/{{PREFIX_LEN}}
-Gateway={{ROUTER}}
-# The box resolves through its own AdGuard instance, so its lookups are
+{{WAN_ADDRESSING}}# The box resolves through its own AdGuard instance, so its lookups are
 # filtered and split exactly like the LAN's.
 DNS=127.0.0.1
-{{IPV6_NETWORK}}
+{{IPV6_NETWORK}}{{WAN_DHCP_SECTION}}
 [Link]
 RequiredForOnline=routable

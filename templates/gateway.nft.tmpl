@@ -12,10 +12,9 @@
 # falls through to the terminal drop. There is no fallback to leak through.
 
 define WAN         = "{{WAN_IF}}"
-define LAN         = {{LAN_CIDR}}
+{{DEFINE_LAN_IF}}define LAN         = {{LAN_CIDR}}
 define BOX         = {{BOX_IP}}
-define ROUTER      = {{ROUTER}}
-define TAILNET     = 100.64.0.0/10
+{{DEFINE_ROUTER}}define TAILNET     = 100.64.0.0/10
 define TPROXY_PORT = {{TPROXY_PORT}}
 define MARK_TPROXY = {{MARK_TPROXY}}
 define MARK_XRAY   = {{MARK_XRAY}}
@@ -95,7 +94,7 @@ table inet gateway {
 
         # Anything else on loopback is genuinely local.
         iif lo return
-
+{{WAN_SPOOF_GUARD}}
         # A filtering resolver answers blocked names with a private address, and
         # the client then sends real traffic there. Treating all of RFC1918 as
         # "local business" bypasses it into a black hole with no counter and no
@@ -117,10 +116,7 @@ table inet gateway {
             meta mark set $MARK_TPROXY counter \
             tproxy ip to :$TPROXY_PORT accept comment "listed-intercepted"
 
-        # Neither of these ever forwards traffic through us, but they are inside
-        # $LAN and so would otherwise be caught by the catch-all below.
-        ip saddr { $BOX, $ROUTER } counter return comment "self-or-router"
-
+{{SELF_OR_ROUTER}}
         # Catch-all for the rest of the LAN. Only traffic that is actually
         # being forwarded reaches this chain, so this matches exactly the
         # devices that pointed their default gateway at this box — a device

@@ -62,6 +62,7 @@ func cmdApply(args []string) error {
 		Files:    files,
 		StageDir: f.paths.Build,
 		DryRun:   *dryRun,
+		Links:    cfg.NetworkLinks(),
 		Options:  apply.Options{Root: f.root},
 		System:   sys,
 		Report: func(s apply.Step) {

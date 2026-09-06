@@ -106,7 +106,10 @@ it reads as a proxy problem. `gw bench` says so explicitly when it sees a
 100 Mb/s link.
 
 The fix is a second NIC (a USB 3.0 gigabit adapter): one leg in, one leg out,
-and the ceiling disappears. Nothing in the config can work around it.
+and the ceiling disappears. Nothing in the *tuning* can work around it — but
+the gateway does support that wiring: set `net.lan_if` and give the uplink its
+own address, and traffic stops hairpinning. See "Two network cards" in the
+README. `gw bench` reports which shape it is measuring.
 
 Other causes, in the order `gw bench` will point at them:
 

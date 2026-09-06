@@ -78,6 +78,10 @@ func (p *Plan) Pending() []Change {
 // whose absence is itself a setting belong here: a unit that vanished because
 // the template was deleted is a code change, not a config change.
 var staleUnits = []string{
+	// Rendered only when net.lan_if is set, so its absence means the box went
+	// back to one card. Leaving it behind would have networkd keep addressing a
+	// LAN side the config no longer describes.
+	"etc/systemd/network/15-gateway-lan.network",
 	"etc/systemd/system/gw-update.timer",
 	"etc/systemd/system/gw-update.service",
 	"etc/systemd/system/gw-web.service",

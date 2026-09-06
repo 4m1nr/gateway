@@ -4,12 +4,17 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
 
 // recordingSystem logs every system call in order.
-type recordingSystem struct{ calls []string }
+type recordingSystem struct {
+	calls []string
+	// removed is what ReconfigureLinks reports having pruned.
+	removed []string
+}
 
 func (s *recordingSystem) EnsureUser(n string) error {
 	s.calls = append(s.calls, "user:"+n)
@@ -29,6 +34,15 @@ func (s *recordingSystem) Disable(u string) error {
 	return nil
 }
 func (s *recordingSystem) EnableStack() error { s.calls = append(s.calls, "enable-stack"); return nil }
+func (s *recordingSystem) ReconfigureLinks(links map[string]string) ([]string, error) {
+	names := make([]string, 0, len(links))
+	for name := range links {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	s.calls = append(s.calls, "reconfigure:"+strings.Join(names, ","))
+	return s.removed, nil
+}
 
 func stagedRequest(t *testing.T, root string) Request {
 	t.Helper()
@@ -178,3 +192,104 @@ var (
 	_ System = (*recordingSystem)(nil)
 	_ System = (*failingSystem)(nil)
 )
+
+// Renumbering must reconfigure the link, and only when a .network file actually
+// changed: reconfiguring drops the link for a moment, and almost every apply is
+// a routing change that has nothing to do with addressing.
+func TestNetworkChangeReconfiguresLinks(t *testing.T) {
+	root := t.TempDir()
+	// No ruleset here: nft -c needs privileges this test does not have, and the
+	// thing under test is the link, not the firewall.
+	stageDir, files := stage(t, map[string]string{
+		"etc/systemd/network/10-gateway-wan.network": "[Network]\nAddress=10.0.0.2/24\n",
+	})
+	sys := &recordingSystem{removed: []string{"eth0 192.168.1.2/24"}}
+	var steps []string
+	req := Request{
+		Files:    files,
+		StageDir: stageDir,
+		Links:    map[string]string{"eth0": "10.0.0.2/24"},
+		Options:  Options{Root: root},
+		System:   sys,
+		Report:   func(s Step) { steps = append(steps, s.Name+": "+s.Detail) },
+	}
+	if _, err := Run(req); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !containsCall(sys.calls, "reconfigure:eth0") {
+		t.Fatalf("the .network file changed but the link was not reconfigured: %v", sys.calls)
+	}
+	if !containsStep(steps, "removed the stale address eth0 192.168.1.2/24") {
+		t.Fatalf("the pruned address was not reported: %v", steps)
+	}
+
+	// Second apply: nothing changed, so the link must be left alone.
+	sys2 := &recordingSystem{}
+	req.System = sys2
+	if _, err := Run(req); err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	if containsCall(sys2.calls, "reconfigure:eth0") {
+		t.Fatalf("nothing changed but the link was reconfigured anyway: %v", sys2.calls)
+	}
+}
+
+func containsCall(calls []string, want string) bool {
+	for _, c := range calls {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsStep(steps []string, want string) bool {
+	for _, s := range steps {
+		if strings.Contains(s, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// Going back to one card removes the LAN unit — and must reconfigure the link
+// as well, or that card keeps the address the config no longer gives it.
+func TestRevertingToOneCardReconfiguresLinks(t *testing.T) {
+	root := t.TempDir()
+	lan := filepath.Join(root, "etc/systemd/network/15-gateway-lan.network")
+	if err := os.MkdirAll(filepath.Dir(lan), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lan, []byte("[Network]\nAddress=192.168.10.1/24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rendered without it: this config has one card again.
+	stageDir, files := stage(t, map[string]string{
+		"etc/systemd/network/10-gateway-wan.network": "[Network]\nAddress=10.0.0.2/24\n",
+	})
+	sys := &recordingSystem{}
+	if _, err := Run(Request{
+		Files:    files,
+		StageDir: stageDir,
+		Links:    map[string]string{"eth0": "10.0.0.2/24"},
+		Options:  Options{Root: root},
+		System:   sys,
+	}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	if _, err := os.Stat(lan); !os.IsNotExist(err) {
+		t.Fatalf("the LAN unit survived: networkd keeps addressing a side the config dropped")
+	}
+	if !containsCall(sys.calls, "reconfigure:eth0") {
+		t.Fatalf("the LAN unit was removed but no link was reconfigured: %v", sys.calls)
+	}
+	// A .network file is configuration, not a unit, so nothing should try to
+	// disable it.
+	for _, c := range sys.calls {
+		if strings.HasPrefix(c, "disable:") && strings.Contains(c, ".network") {
+			t.Fatalf("tried to disable a .network file as if it were a unit: %s", c)
+		}
+	}
+}

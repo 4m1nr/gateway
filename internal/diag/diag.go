@@ -115,19 +115,30 @@ func (c Collector) CollectDiag(client string) (Diag, error) {
 	d.XrayListening = listeningOn(env["TPROXY_PORT"])
 
 	if client != "" {
-		c.diagClient(&d, client, env["WAN_IF"])
+		// The card the client's packet actually arrives on. Two-armed that is
+		// the LAN one, and asking the kernel about the uplink instead would
+		// report a martian source for a client that is perfectly fine — the one
+		// verdict this diagnostic exists to get right.
+		iif := env["WAN_IF"]
+		if lan := env["LAN_IF"]; lan != "" {
+			iif = lan
+		}
+		c.diagClient(&d, client, iif)
 	}
 	return d, nil
 }
 
 // diagClient asks the kernel what it does with a packet shaped like this
 // client's, instead of reasoning about the rules.
-func (c Collector) diagClient(d *Diag, client, wan string) {
+//
+// iif is the card the client is on: the single NIC one-armed, the LAN one
+// two-armed.
+func (c Collector) diagClient(d *Diag, client, iif string) {
 	const probeDst = "1.1.1.1"
 
 	// mark 1 is what TPROXY sets, so this is the lookup a marked packet gets.
 	out, _ := runCombined(10*time.Second, "ip", "route", "get", probeDst,
-		"from", client, "iif", wan, "mark", "1")
+		"from", client, "iif", iif, "mark", "1")
 	d.Forward = strings.TrimSpace(out)
 	switch {
 	case strings.Contains(out, "Invalid argument"):

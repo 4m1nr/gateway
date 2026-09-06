@@ -63,6 +63,26 @@ file    = "outbounds/backup.json"`)
 		})
 	}
 
+	// The two-armed office setup, both ways of addressing the uplink. The two
+	// differ in more than one rule — the spoof guard, the ROUTER define, the
+	// self-or-router return — so both shapes are rendered rather than one.
+	twoArm := func(t string) string {
+		return b.sub(t, `#lan_if     = "eth1"`, `lan_if     = "eth1"`)
+	}
+	b.derive("two-arm", example, func(t string) string {
+		t = twoArm(t)
+		t = b.sub(t, `#wan_ip          = "10.0.0.2"`, `wan_ip          = "10.0.0.2"`)
+		t = b.sub(t, `#wan_prefix_len  = 24`, `wan_prefix_len  = 24`)
+		// Two-armed the router lives on the uplink, not on the LAN.
+		return b.sub(t, `router     = "192.168.1.1"`, `router     = "10.0.0.1"`)
+	})
+	b.derive("two-arm-dhcp", example, func(t string) string {
+		t = twoArm(t)
+		t = b.sub(t, `#wan_dhcp   = true`, `wan_dhcp   = true`)
+		// The lease carries the gateway, so naming one here is an error.
+		return b.subRE(t, regexp.MustCompile(`(?m)^router     = "192\.168\.1\.1"\n`), "")
+	})
+
 	b.derive("no-web", example, func(t string) string {
 		// Only the first: [web] is the first table with a bare `enabled`.
 		return b.subFirstRE(t, regexp.MustCompile(`(?m)^enabled = true$`), "enabled = false")

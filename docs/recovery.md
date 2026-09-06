@@ -130,8 +130,18 @@ sudo systemctl disable --now gateway.target
 sudo systemctl disable --now xray gw-network gw-health.timer gw-geoupdate.timer
 sudo systemctl disable --now AdGuardHome tailscaled
 sudo nft delete table ip gwpanic
-sudo rm /etc/sysctl.d/99-gateway.conf /etc/systemd/network/10-gateway-wan.network
+sudo rm /etc/sysctl.d/99-gateway.conf \
+       /etc/systemd/network/10-gateway-wan.network \
+       /etc/systemd/network/15-gateway-lan.network   # two-armed boxes only
+sudo ip addr flush dev eth0        # and the LAN card, if there is one
 sudo systemctl restart systemd-networkd
 ```
 
-Then set each opted-in device's gateway back to the router.
+The flush is not optional. networkd does not withdraw an address just because
+the file that set it is gone, so without it the box keeps the static address it
+was configured with — through a reboot — and removing the files looks like it
+did nothing.
+
+Then set each opted-in device's gateway back to the router. On a two-armed box
+there is nothing to set: those devices have no route out until something else
+is plugged in where the gateway was.

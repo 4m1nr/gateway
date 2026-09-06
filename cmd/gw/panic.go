@@ -78,6 +78,13 @@ func restoreResolver() {
 	env := cli.Env("/usr/local/lib/gateway/env")
 	router := env["ROUTER"]
 	if router == "" {
+		// Empty under net.wan_dhcp: the lease carries the gateway, so the
+		// config never had one to export. Ask the kernel what it learned —
+		// panic mode is exactly when "no router is known" is the least useful
+		// thing this can say.
+		router = defaultGateway()
+	}
+	if router == "" {
 		cli.Warn("DNS is not resolving and no router is known — set /etc/resolv.conf by hand")
 		return
 	}
@@ -95,6 +102,21 @@ func restoreResolver() {
 	}
 	cli.Warn("DNS was dead; /etc/resolv.conf now points at the router (%s)", router)
 	cli.Warn("previous file kept at %s", resolvBackup)
+}
+
+// defaultGateway reads the current default route, or "" if there is none.
+func defaultGateway() string {
+	out, err := exec.Command("ip", "-4", "route", "show", "default").Output()
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(string(out))
+	for i, f := range fields {
+		if f == "via" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
 }
 
 // resolves reports whether a name can be looked up right now.

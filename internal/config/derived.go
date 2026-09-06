@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"net/netip"
 	"sort"
 	"strings"
@@ -75,6 +76,25 @@ func (c *Config) ProfileSources(name string) []string {
 // box's own traffic to a private address is local business.
 func (c *Config) BypassDst() []string {
 	return append([]string(nil), ReservedDst...)
+}
+
+// NetworkLinks maps each interface this config addresses to the address it
+// should carry, as "10.0.0.2/24". An empty value means the address comes from a
+// lease and nothing may be assumed about it.
+//
+// Apply uses this to leave a renumbered card holding one address rather than
+// two: networkd adds the new one and keeps the old.
+func (c *Config) NetworkLinks() map[string]string {
+	links := map[string]string{}
+	if c.WANDHCP {
+		links[c.WANIf] = ""
+	} else {
+		links[c.WANIf] = fmt.Sprintf("%s/%d", c.WANIP, c.WANPrefixLen)
+	}
+	if c.TwoArm {
+		links[c.LANIf] = fmt.Sprintf("%s/%d", c.BoxIP, c.PrefixLen)
+	}
+	return links
 }
 
 // RoutedPrivate is private space that routing deliberately sends somewhere.
@@ -194,6 +214,15 @@ func (c *Config) PoisonedDst() []string {
 		netip.MustParsePrefix("192.168.0.0/16"),
 	}
 	keep := []netip.Prefix{c.LAN}
+	// Two-armed, the uplink segment is a second network this box is genuinely
+	// on. Dropping traffic to it as a poisoned answer would black-hole the
+	// office modem's own address — and under DHCP we do not know the segment,
+	// which is what routing.extra_local_networks is for.
+	if c.WANCidr != "" && c.WANCidr != c.LANCidr {
+		if p, err := netip.ParsePrefix(c.WANCidr); err == nil {
+			keep = append(keep, p.Masked())
+		}
+	}
 	for _, cidr := range c.ExtraLocal {
 		if p, err := netip.ParsePrefix(cidr); err == nil {
 			keep = append(keep, p.Masked())

@@ -2,6 +2,8 @@ package apply
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/am1nr/gateway/internal/render"
 )
@@ -36,6 +38,12 @@ type System interface {
 	DaemonReload() error
 	// Restart restarts a unit.
 	Restart(unit string) error
+	// ReconfigureLinks re-reads the .network files and puts each named link on
+	// exactly the address the config gives it. links maps an interface name to
+	// the address it should carry ("10.0.0.2/24"); an empty value means the
+	// address comes from a lease, and nothing on that link may be pruned.
+	// Returns the addresses it removed, for reporting.
+	ReconfigureLinks(links map[string]string) ([]string, error)
 	// Disable stops a unit and removes it from boot.
 	Disable(unit string) error
 	// EnableStack enables everything that is installed, for boot.
@@ -50,6 +58,10 @@ type Request struct {
 	StageDir string
 	// DryRun stops after validation, having written nothing.
 	DryRun bool
+	// Links are the interfaces the rendered .network files describe, mapped to
+	// the address each should carry — empty for a link addressed by DHCP. They
+	// are reconfigured only when one of those files actually changed.
+	Links map[string]string
 
 	Options Options
 	System  System
@@ -96,7 +108,12 @@ func Run(req Request) (*Plan, error) {
 		req.Report.report("remove", fmt.Sprintf("%d units no longer in the config", len(plan.Stale)))
 		if req.System != nil {
 			for _, unit := range plan.Stale {
-				_ = req.System.Disable(unitName(unit))
+				// Only things under etc/systemd/system/ are units systemd can
+				// be asked about. A .network file is configuration, not a unit,
+				// and disabling it is a meaningless command.
+				if strings.HasPrefix(unit, "etc/systemd/system/") {
+					_ = req.System.Disable(unitName(unit))
+				}
 			}
 		}
 		if err := RemoveStale(plan, req.Options); err != nil {
@@ -121,6 +138,30 @@ func Run(req Request) (*Plan, error) {
 		return plan, fmt.Errorf("enabling the gateway stack: %w", err)
 	}
 
+	// Renumbering. networkd is not told to re-read anything by installing a
+	// file, so before this the new address only appeared at the next reboot —
+	// and then appeared BESIDE the old one, because networkd does not withdraw
+	// an address just because the configuration that set it is gone. The card
+	// ends up carrying both, the old one still answering, and nothing in
+	// `gw apply` says which is meant to be there.
+	if networkChanged(plan) && len(req.Links) > 0 {
+		req.Report.report("links", "reconfiguring "+joinLinks(req.Links))
+		removed, err := req.System.ReconfigureLinks(req.Links)
+		for _, addr := range removed {
+			req.Report.report("links", "removed the stale address "+addr)
+		}
+		if err != nil {
+			// Not fatal, and deliberately so: this runs AFTER the tree is
+			// installed, so returning here would leave the files written and
+			// the firewall never reloaded — strictly worse than a card that
+			// keeps its old address until someone looks. Said plainly instead,
+			// because a silent half-renumbering is the thing this step exists
+			// to prevent.
+			req.Report.report("links", "could not reconfigure the links: "+err.Error()+
+				" — check `ip -br addr`; the card may still be on its old address")
+		}
+	}
+
 	// Policy routing and the firewall first: Xray's listener is useless if
 	// nothing is being diverted to it, and restarting in the other order leaves
 	// a window where clients are intercepted with no one listening.
@@ -129,6 +170,38 @@ func Run(req Request) (*Plan, error) {
 		return plan, fmt.Errorf("restarting gw-network: %w", err)
 	}
 	return plan, nil
+}
+
+// networkChanged reports whether this apply touched a networkd unit.
+//
+// Reconfiguring on every apply would be wrong: it briefly drops the link, and
+// almost every apply is a routing or client change that has nothing to do with
+// addressing.
+func networkChanged(plan *Plan) bool {
+	for _, c := range plan.Pending() {
+		if strings.HasPrefix(c.Path, "etc/systemd/network/") {
+			return true
+		}
+	}
+	// A unit that stopped being rendered counts too: going from two cards back
+	// to one deletes the LAN unit, and without a reconfigure that card keeps
+	// the address the config no longer gives it.
+	for _, unit := range plan.Stale {
+		if strings.HasPrefix(unit, "etc/systemd/network/") {
+			return true
+		}
+	}
+	return false
+}
+
+// joinLinks names the links in a stable order, for the progress line.
+func joinLinks(links map[string]string) string {
+	names := make([]string, 0, len(links))
+	for name := range links {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // unitName turns a staged path back into a systemd unit name.

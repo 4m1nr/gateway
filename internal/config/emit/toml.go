@@ -76,14 +76,22 @@ type section struct {
 var layout = []section{
 	{
 		name: "net",
-		doc: "The box's own network. Everything here has to match the LAN it sits on;\n" +
-			"a wrong static_ip is a box that never comes up.",
+		doc: "The box's own network. Everything here has to match the network it\n" +
+			"sits on; a wrong static_ip is a box that never comes up.",
 		keys: []entry{
-			{"wan_if", "the interface facing the router — the only NIC on a thin client"},
+			{"wan_if", "the interface facing the internet"},
+			{"lan_if", "the interface facing the LAN, on a box with two cards.\n" +
+				"Set, static_ip below becomes the LAN's own gateway and every\n" +
+				"device on that segment goes through this box. Unset, there is one\n" +
+				"NIC and devices opt in by pointing at it."},
 			{"lan_cidr", "the LAN this gateway serves"},
-			{"router", "the upstream router; the box's own default route"},
-			{"static_ip", "must be OUTSIDE the router's DHCP pool"},
+			{"router", "the upstream router; the box's own default route.\n" +
+				"Inside lan_cidr with one card; on the wan_if side with two"},
+			{"static_ip", "must be OUTSIDE the DHCP pool serving this LAN"},
 			{"prefix_len", ""},
+			{"wan_dhcp", "take the uplink address from a lease (two cards only)"},
+			{"wan_ip", "the box's own address on the uplink, when it is not leased"},
+			{"wan_prefix_len", ""},
 		},
 	},
 	{

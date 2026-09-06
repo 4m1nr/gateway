@@ -121,6 +121,16 @@ func (c *Config) parseNet(raw map[string]any) error {
 	if c.WANIf, err = needString(net, "wan_if", "net"); err != nil {
 		return err
 	}
+	// A second card facing the LAN is what makes this two-armed: the box stops
+	// sharing a segment with the router and becomes the only way off the LAN.
+	// Absent, every rule below reads exactly as it did when there was one NIC.
+	c.LANIf = str(net, "lan_if", "")
+	c.TwoArm = c.LANIf != ""
+	if c.TwoArm && c.LANIf == c.WANIf {
+		return errf("net.lan_if and net.wan_if are both %q — a two-armed gateway "+
+			"needs two cards", c.LANIf)
+	}
+
 	lanCidr, err := needString(net, "lan_cidr", "net")
 	if err != nil {
 		return err
@@ -129,16 +139,6 @@ func (c *Config) parseNet(raw map[string]any) error {
 		return err
 	}
 	c.LANCidr = c.LAN.String()
-
-	routerStr, err := needString(net, "router", "net")
-	if err != nil {
-		return err
-	}
-	router, err := parseAddr(routerStr, "net.router")
-	if err != nil {
-		return err
-	}
-	c.Router = routerStr
 
 	boxStr, err := needString(net, "static_ip", "net")
 	if err != nil {
@@ -149,28 +149,127 @@ func (c *Config) parseNet(raw map[string]any) error {
 		return err
 	}
 	c.BoxIP = boxStr
+	if !c.LAN.Contains(box) {
+		return errf("net.static_ip (%s) is not inside net.lan_cidr (%s)",
+			c.BoxIP, c.LANCidr)
+	}
 
 	if c.PrefixLen, err = integer(net, "prefix_len", c.LAN.Bits()); err != nil {
 		return err
 	}
 
-	for _, pair := range []struct {
-		label string
-		addr  netip.Addr
-		text  string
-	}{{"router", router, c.Router}, {"static_ip", box, c.BoxIP}} {
-		if !c.LAN.Contains(pair.addr) {
-			return errf("net.%s (%s) is not inside net.lan_cidr (%s)",
-				pair.label, pair.text, c.LANCidr)
-		}
-	}
-	if c.Router == c.BoxIP {
-		return errf("net.router and net.static_ip cannot be the same address")
+	if err := c.parseWAN(net); err != nil {
+		return err
 	}
 
 	c.IPv6Mode = str(table(raw, "ipv6"), "mode", "off")
 	if c.IPv6Mode != "off" && c.IPv6Mode != "pass" {
 		return errf("ipv6.mode must be 'off' or 'pass'")
+	}
+	return nil
+}
+
+// parseWAN reads the uplink side of [net].
+//
+// Single-armed, there is only one card and one segment: the router is a peer on
+// the LAN and the box's static address is what both the LAN and the router see.
+// Two-armed, the uplink is a separate network — and may not be described in the
+// config at all, because an office hands it out by DHCP.
+func (c *Config) parseWAN(net map[string]any) error {
+	var err error
+	if c.WANDHCP, err = boolean(net, "wan_dhcp", false); err != nil {
+		return err
+	}
+	if c.WANDHCP && !c.TwoArm {
+		return errf("net.wan_dhcp needs net.lan_if: with one card the box's " +
+			"address is the one every client points at, so it cannot come from a lease")
+	}
+
+	if !c.TwoArm {
+		// One card: wan_ip and wan_prefix_len would be a second, contradictory
+		// name for static_ip. Reject rather than pick a winner.
+		for _, key := range []string{"wan_ip", "wan_prefix_len"} {
+			if _, ok := net[key]; ok {
+				return errf("net.%s needs net.lan_if: with one card the uplink "+
+					"address IS net.static_ip", key)
+			}
+		}
+		routerStr, err := needString(net, "router", "net")
+		if err != nil {
+			return err
+		}
+		router, err := parseAddr(routerStr, "net.router")
+		if err != nil {
+			return err
+		}
+		c.Router = routerStr
+		if !c.LAN.Contains(router) {
+			return errf("net.router (%s) is not inside net.lan_cidr (%s)",
+				c.Router, c.LANCidr)
+		}
+		if c.Router == c.BoxIP {
+			return errf("net.router and net.static_ip cannot be the same address")
+		}
+		// One card, one address: rendering asks for the uplink and gets it.
+		c.WANIP, c.WANPrefixLen = c.BoxIP, c.PrefixLen
+		c.WANCidr = c.LANCidr
+		return nil
+	}
+
+	if c.WANDHCP {
+		// Both would be read as "use this" and neither would be. Say so instead
+		// of leaving a static address in the file that nothing applies.
+		for _, key := range []string{"wan_ip", "wan_prefix_len", "router"} {
+			if _, ok := net[key]; ok {
+				return errf("net.%s is set but net.wan_dhcp is true — the lease "+
+					"decides the uplink address and gateway; remove one of the two", key)
+			}
+		}
+		return nil
+	}
+
+	wanStr, err := needString(net, "wan_ip", "net")
+	if err != nil {
+		return errf("%v (net.lan_if is set, so the uplink needs its own address "+
+			"— or net.wan_dhcp = true)", err)
+	}
+	wan, err := parseAddr(wanStr, "net.wan_ip")
+	if err != nil {
+		return err
+	}
+	c.WANIP = wanStr
+	if c.WANPrefixLen, err = integer(net, "wan_prefix_len", 24); err != nil {
+		return err
+	}
+	if c.WANPrefixLen < 0 || c.WANPrefixLen > wan.BitLen() {
+		return errf("net.wan_prefix_len (%d) is not a valid prefix length for %s",
+			c.WANPrefixLen, c.WANIP)
+	}
+	wanNet := netip.PrefixFrom(wan, c.WANPrefixLen).Masked()
+	c.WANCidr = wanNet.String()
+
+	routerStr, err := needString(net, "router", "net")
+	if err != nil {
+		return err
+	}
+	router, err := parseAddr(routerStr, "net.router")
+	if err != nil {
+		return err
+	}
+	c.Router = routerStr
+	if !wanNet.Contains(router) {
+		return errf("net.router (%s) is not inside the uplink network (%s) — "+
+			"two-armed, the router is on the wan_if side, not the LAN", c.Router, c.WANCidr)
+	}
+	if c.Router == c.WANIP {
+		return errf("net.router and net.wan_ip cannot be the same address")
+	}
+	// Overlapping segments would give the kernel two routes for the same space
+	// and the firewall no way to tell one side from the other.
+	if c.LAN.Contains(wanNet.Addr()) || wanNet.Contains(c.LAN.Addr()) {
+		return errf("net.lan_cidr (%s) and the uplink network (%s) overlap — "+
+			"the two sides of a two-armed gateway must be different networks",
+			c.LANCidr, c.WANCidr)
 	}
 	return nil
 }

@@ -48,7 +48,7 @@ func (h Handler) diff() Response {
 // to make a change they have not thought through, which is exactly why this
 // path is the same one `gw apply` uses rather than a shortcut.
 func (h Handler) applyNow() Response {
-	_, files, stageDir, err := h.stage()
+	cfg, files, stageDir, err := h.stage()
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -57,6 +57,7 @@ func (h Handler) applyNow() Response {
 	plan, err := apply.Run(apply.Request{
 		Files:    files,
 		StageDir: stageDir,
+		Links:    cfg.NetworkLinks(),
 		Options:  apply.Options{Root: h.rootOrSlash()},
 		System:   h.applySystem(),
 		Report: func(s apply.Step) {

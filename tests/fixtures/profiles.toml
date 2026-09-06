@@ -9,13 +9,42 @@
 [net]
 # Interface facing the router. `gw init` detects this.
 wan_if     = "eth0"
-# The home LAN this box sits on.
+# The LAN this box serves.
 lan_cidr   = "192.168.1.0/24"
 # The router (this box's own default gateway).
 router     = "192.168.1.1"
 # Static address for this box. MUST be outside the router's DHCP pool.
 static_ip  = "192.168.1.2"
 prefix_len = 24
+
+# --- two network cards (an office setup) ------------------------------------
+#
+# Set lan_if when this box has one card on each side: one facing the office
+# LAN, one facing the internet. That changes what the keys above mean.
+#
+#   static_ip   becomes the LAN's own gateway. Every device on that segment
+#               goes through this box, opted in or not — there is no other way
+#               off the network. [policy].default therefore governs the whole
+#               office rather than only the devices that asked for it.
+#   router      moves to the far side, onto the uplink network below, and must
+#               NOT be inside lan_cidr any more.
+#
+# Nothing here hands out addresses. Whatever already serves DHCP on the LAN
+# keeps doing it; it just has to advertise static_ip as BOTH the gateway and
+# the DNS server. (Hand out the router instead and names resolve around
+# AdGuard: blocked names come back as a private address, the device sends
+# traffic there, and the gateway drops it as unreachable.)
+#
+#lan_if     = "eth1"
+#
+# The uplink address. Either it comes from whatever is upstream —
+#
+#wan_dhcp   = true
+#
+# — or set it by hand, in which case router must be inside this network:
+#
+#wan_ip          = "10.0.0.2"
+#wan_prefix_len  = 24
 
 [ipv6]
 # "off"  — disable v6 on wan_if and drop forwarded v6 (recommended, and what

@@ -120,13 +120,33 @@ type Config struct {
 	Path string
 
 	// ---- net ----
-	WANIf     string
+	WANIf string
+	// LANIf is the card facing the LAN in a two-armed setup, and empty in the
+	// single-NIC one. Its presence is what TwoArm reports.
+	LANIf string
+	// TwoArm reports whether the box sits between two segments rather than on
+	// one. It changes what the addresses below mean: BoxIP is then the LAN's
+	// gateway rather than a peer of the router, and Router is on the far side.
+	TwoArm    bool
 	LAN       netip.Prefix
 	LANCidr   string
 	Router    string
 	BoxIP     string
 	PrefixLen int
-	IPv6Mode  string
+	// WANDHCP takes the uplink address from a lease instead of the config.
+	// Only meaningful two-armed: with one card the box's address is the one the
+	// LAN points at, so it cannot be allowed to move.
+	WANDHCP bool
+	// WANIP and WANPrefixLen address the uplink. Single-armed they mirror BoxIP
+	// and PrefixLen — there is only one card — and under WANDHCP they are empty,
+	// because the lease decides.
+	WANIP        string
+	WANPrefixLen int
+	// WANCidr is the uplink segment, when it is known at render time. Empty
+	// under DHCP. It is genuinely reachable private space, so it is kept out of
+	// the poisoned-DNS drop.
+	WANCidr  string
+	IPv6Mode string
 
 	// ---- xray ----
 	TproxyPort     int

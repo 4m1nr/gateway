@@ -248,7 +248,85 @@ func (r *Runner) checkPlumbing() {
 		"Xray is listening on the TPROXY port ("+tproxyPort+")",
 		"nothing listening on "+tproxyPort)
 
+	r.checkLinks()
 	r.checkClock()
+}
+
+// checkLinks proves the two-armed setup is actually wired the way the config
+// says. Single-armed there is one card and nothing to get wrong, so this is
+// silent there.
+//
+// The failures it catches are the quiet ones. A LAN card with no address leaves
+// the whole office offline while the box itself is perfectly happy on the
+// uplink. And an address that is not the one the config names means a previous
+// renumbering left the old one behind — the card answers on both, half the
+// devices reach the gateway they were told about, and nothing says why.
+func (r *Runner) checkLinks() {
+	lan := r.Env["LAN_IF"]
+	if lan == "" {
+		return
+	}
+	boxIP := r.Env["BOX_IP"]
+
+	out, err := runOut(5*time.Second, "ip", "-4", "-o", "addr", "show", "dev", lan, "scope", "global")
+	if err != nil {
+		r.badf("Check that net.lan_if names a real card: `ip -br link` lists them.",
+			"%s does not exist — the LAN side of the gateway is not there", lan)
+		return
+	}
+	addrs := inetAddrs(out)
+	switch {
+	case len(addrs) == 0:
+		r.bad("%s has no address — every device on the LAN is pointed at a "+
+			"gateway that is not answering", lan)
+	case !containsAddr(addrs, boxIP):
+		r.badf("Run `sudo gw apply`, which now removes an address the config no "+
+			"longer names.",
+			"%s carries %s, but net.static_ip is %s — the LAN is pointed at an "+
+				"address this card does not have", lan, strings.Join(addrs, ", "), boxIP)
+	case len(addrs) > 1:
+		r.badf("Run `sudo gw apply` to drop the ones the config does not name.",
+			"%s carries more than one address (%s) — a previous renumbering left "+
+				"the old one behind", lan, strings.Join(addrs, ", "))
+	default:
+		r.ok("%s carries exactly %s, the address the LAN points at", lan, boxIP)
+	}
+
+	// Under wan_dhcp the config has no uplink address to compare against, so
+	// the question becomes whether a lease arrived at all.
+	if r.Env["ROUTER"] == "" {
+		def, _ := runOut(5*time.Second, "ip", "-4", "route", "show", "default", "dev", r.Env["WAN_IF"])
+		r.verdict(strings.Contains(def, "default via"),
+			"the uplink has a default route from its lease",
+			"no default route on "+r.Env["WAN_IF"]+" — net.wan_dhcp is set but no lease arrived")
+	}
+}
+
+// inetAddrs pulls every "inet a.b.c.d/n" out of `ip -o addr` output.
+func inetAddrs(out string) []string {
+	var addrs []string
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "inet" && i+1 < len(fields) {
+				addrs = append(addrs, fields[i+1])
+			}
+		}
+	}
+	return addrs
+}
+
+// containsAddr reports whether any of the CIDRs carries the given address.
+func containsAddr(addrs []string, want string) bool {
+	if want == "" {
+		return true // nothing to compare against; not a failure
+	}
+	for _, a := range addrs {
+		if strings.SplitN(a, "/", 2)[0] == want {
+			return true
+		}
+	}
+	return false
 }
 
 // checkClock verifies the system time.
@@ -546,10 +624,19 @@ func (r *Runner) checkIPv6() {
 		return
 	}
 
-	out, _ := runOut(5*time.Second, "ip", "-6", "addr", "show", "dev", wan, "scope", "global")
-	r.verdict(!strings.Contains(out, "inet6"),
-		wan+" has no global IPv6 address",
-		wan+" has a global IPv6 address — clients can bypass the tunnel over v6")
+	// Both cards on a two-armed box, and the LAN one matters more: it is the
+	// card clients are on, so a global address there is a v6 default route
+	// waiting to be advertised to every device the tunnel is meant to carry.
+	ifaces := []string{wan}
+	if lan := r.Env["LAN_IF"]; lan != "" {
+		ifaces = append(ifaces, lan)
+	}
+	for _, iface := range ifaces {
+		out, _ := runOut(5*time.Second, "ip", "-6", "addr", "show", "dev", iface, "scope", "global")
+		r.verdict(!strings.Contains(out, "inet6"),
+			iface+" has no global IPv6 address",
+			iface+" has a global IPv6 address — clients can bypass the tunnel over v6")
+	}
 
 	// A working v6 path is an unproxied path. The check passes when it fails.
 	_, err := runOut(8*time.Second, "curl", "-6", "-fsS", "--max-time", "5",

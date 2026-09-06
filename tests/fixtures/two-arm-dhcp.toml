@@ -1,0 +1,535 @@
+# ============================================================================
+#  Gateway — single source of truth
+#
+#  Copy to gateway.toml (gitignored) or generate it with `gw init`.
+#  Every config on the box is rendered from this file: `gw apply`.
+#  Nothing here is edited on the box directly — edit here, re-apply.
+# ============================================================================
+
+[net]
+# Interface facing the router. `gw init` detects this.
+wan_if     = "eth0"
+# The LAN this box serves.
+lan_cidr   = "192.168.1.0/24"
+# The router (this box's own default gateway).
+# Static address for this box. MUST be outside the router's DHCP pool.
+static_ip  = "192.168.1.2"
+prefix_len = 24
+
+# --- two network cards (an office setup) ------------------------------------
+#
+# Set lan_if when this box has one card on each side: one facing the office
+# LAN, one facing the internet. That changes what the keys above mean.
+#
+#   static_ip   becomes the LAN's own gateway. Every device on that segment
+#               goes through this box, opted in or not — there is no other way
+#               off the network. [policy].default therefore governs the whole
+#               office rather than only the devices that asked for it.
+#   router      moves to the far side, onto the uplink network below, and must
+#               NOT be inside lan_cidr any more.
+#
+# Nothing here hands out addresses. Whatever already serves DHCP on the LAN
+# keeps doing it; it just has to advertise static_ip as BOTH the gateway and
+# the DNS server. (Hand out the router instead and names resolve around
+# AdGuard: blocked names come back as a private address, the device sends
+# traffic there, and the gateway drops it as unreachable.)
+#
+lan_if     = "eth1"
+#
+# The uplink address. Either it comes from whatever is upstream —
+#
+wan_dhcp   = true
+#
+# — or set it by hand, in which case router must be inside this network:
+#
+#wan_ip          = "10.0.0.2"
+#wan_prefix_len  = 24
+
+[ipv6]
+# "off"  — disable v6 on wan_if and drop forwarded v6 (recommended, and what
+#          this setup is built around: opt-in-per-device cannot control a v6
+#          default route, which comes from the router's RAs).
+# "pass" — leave v6 alone entirely (leaks around the tunnel; do not use unless
+#          you know why you want it).
+mode = "off"
+
+# ============================================================================
+#  Bootstrap proxy
+#
+#  Only for jobs that need the internet BEFORE the tunnel exists: installing
+#  Xray, fetching geodata, apt. Once the gateway is running its own traffic is
+#  already routed through Xray, and this is unused — leave it empty unless
+#  first-time setup on this box cannot reach the internet directly.
+#
+#  Prefer socks5h:// so DNS is resolved at the proxy rather than locally.
+#  Override for a single command with:  gw --proxy socks5h://127.0.0.1:1080 ...
+# ============================================================================
+[bootstrap]
+# Used only while the tunnel cannot carry the download itself. Once the
+# watchdog reports a working tunnel this is ignored automatically — the box's
+# own traffic already goes through Xray, so using the proxy as well would send
+# the download out through a tunnel that is already carrying it, and would fail
+# outright once the proxy is gone. There is no need to clear it by hand.
+#
+# `gw --proxy socks5h://...` overrides for one command, tunnel or not.
+socks_proxy = ""
+
+# ============================================================================
+#  Xray
+# ============================================================================
+[xray]
+tproxy_port     = 12345    # dokodemo-door, TPROXY target
+socks_port      = 10808    # loopback only, for manual use + health probes
+http_port       = 10809    # loopback only
+api_port        = 10085    # loopback-only stats API, used by `gw check`
+log_level       = "warning"
+domain_strategy = "IPIfNonMatch"
+# SO_MARK stamped on every Xray outbound so its own packets skip the OUTPUT
+# marking rule. Changing this means changing the nftables rule too.
+outbound_mark   = 255
+
+# The primary outbound: a complete Xray outbound object, used verbatim.
+#
+# The gateway does not model protocols or transports — paste whatever Xray
+# supports (VLESS/XHTTP, Reality, Trojan, Shadowsocks, a chain, ...). Two
+# fields are always overridden, because the gateway depends on them:
+#
+#   tag             routing rules reference it
+#   sockopt.mark    the loop guard; without it Xray's own packets are
+#                   re-captured by TPROXY and the gateway deadlocks
+#
+# `gw init` writes this file for you from a vless:// share link.
+[xray.outbound]
+file = "outbounds/main.json"          # or: json = """ { ... } """
+
+# Optional. Pins the server's address so the tunnel never needs DNS to come up
+# — otherwise that is a real boot-time chicken-and-egg. Leave empty for a
+# CDN-fronted host whose IP legitimately rotates.
+server_ip = ""
+
+# Only needed when the address cannot be read out of the outbound automatically
+# (unusual protocols). It is what gets resolved via a direct resolver.
+# server_domain = ""
+
+# Optional second outbound. When enabled, Xray load-balances with a burst
+# observatory so a dead server fails over instead of taking you offline.
+[xray.fallback]
+enabled = false
+# file      = "outbounds/backup.json"
+# server_ip = ""
+
+# ============================================================================
+#  Extra upstreams
+#
+#  More Xray servers that profiles can send selected traffic through — a work
+#  VPN, a second exit country. Same form as [xray.outbound]: a complete Xray
+#  outbound object, used verbatim. `name` becomes the outbound tag, so keep it
+#  to lowercase letters, digits and dashes.
+# ============================================================================
+# [[upstream]]
+# name     = "work"
+# file     = "outbounds/work.json"
+# location = "outside"          # or "inside" — which address `gw check` probes
+#                               # through it. A domestic server fetching a
+#                               # foreign site proves nothing, and a foreign one
+#                               # fetching a domestic site is often refused at
+#                               # the far end; either way the wrong probe calls
+#                               # a working server dead.
+# dns      = "172.30.0.53"      # optional: a resolver reached THROUGH this
+#                               # upstream. Names a profile routes here are
+#                               # resolved by it, so a network that answers its
+#                               # own names differently answers them itself.
+# name      = "work"
+# file      = "outbounds/work.json"
+# server_ip = ""
+
+# ============================================================================
+#  Profiles
+#
+#  A profile is a built-in policy plus destination-specific exceptions:
+#  "behave like `base`, except send these domains/networks via somewhere else".
+#  Assign one to a device with policy = "<profile name>".
+#
+#  base = "proxy" | "direct"   what unmatched traffic does
+#  via  = an [[upstream]] name, or "proxy" / "direct" / "block"
+#
+#  Rules are matched most-specific-first: a profile rule beats the global
+#  domestic-direct split, so work domains under .ir still reach the work
+#  upstream.
+#
+#  NOTE: a profile device is always intercepted, even with base = "direct" —
+#  splitting traffic by destination requires Xray to see it. So a profile
+#  device is fail-closed like any proxied one: if the tunnel dies, it loses
+#  connectivity rather than falling back to a direct path.
+# ============================================================================
+# [[profile]]
+# name = "work-laptop"
+# base = "proxy"
+#
+#   [[profile.route]]
+#   via     = "work"
+#   domains = ["domain:corp.work.example", "domain:jira.work.example"]
+#   ips     = ["10.20.0.0/16", "203.0.113.0/24"]
+#
+#   [[profile.route]]
+#   via     = "block"
+#   domains = ["geosite:category-ads-all"]
+
+# ============================================================================
+#  Custom routing
+#
+#  Extra Xray routing rules spliced into the generated pipeline. A TOML table
+#  maps one-to-one onto Xray's rule JSON, so the table *is* the rule —
+#  `position` is the only key the gateway consumes.
+#
+#  position = "first"   ahead of everything, including per-client policy.
+#                       Where a hard block belongs.
+#             "before"  (default) after per-client policy, before the global
+#                       geo split — so it beats "all .ir goes direct".
+#             "after"   after the geo split, before the fallthrough defaults.
+#
+#  outboundTag accepts an [[upstream]] name as well as proxy / direct / block.
+# ============================================================================
+
+# Nothing reaches this host on SSH, from any device:
+# [[route]]
+# position    = "first"
+# ip          = ["203.0.113.5/32"]
+# port        = "22"
+# outboundTag = "block"
+
+# Force an intranet name direct even though it would otherwise be tunnelled:
+# [[route]]
+# domain      = ["domain:intranet.example.com"]
+# outboundTag = "direct"
+
+# Send a whole network through the work upstream, for every device:
+# [[route]]
+# ip          = ["198.51.100.0/24"]
+# outboundTag = "work"
+
+# Escape hatch for anything the TOML form cannot express:
+# [[route]]
+# json = """
+# { "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" }
+# """
+
+# ============================================================================
+#  Split routing — what goes direct vs through the tunnel
+# ============================================================================
+[routing]
+direct_geosite = ["geosite:private", "geosite:category-ir"]
+direct_geoip   = ["geoip:private", "geoip:ir"]
+block_geosite  = []          # e.g. ["geosite:category-ads-all"]
+block_geoip    = []          # e.g. ["geoip:cn", "198.51.100.0/24"]
+block_bittorrent = false     # true = drop torrent traffic at the gateway
+
+# Drop client traffic aimed at private space that is not reachable here,
+# instead of silently bypassing it. That traffic is almost always a client
+# following a poisoned DNS answer, and bypassing it black-holes the packets
+# with no counter and no log. Shows up as "poisoned-dns" in the drop counters.
+drop_private_destinations = true
+
+# Private networks that ARE reachable from this box, and so must not be
+# treated as poisoned — another VLAN, a site-to-site link, or the modem when
+# it sits on a different subnet from the LAN (a 192.168.0.1 modem behind a
+# 192.168.1.0/24 LAN needs "192.168.0.0/24" here, or it is unreachable).
+#
+# Only for networks reached DIRECTLY. A private range that should go through
+# an upstream belongs in that profile's route instead: those are carved out
+# of the poisoned set and intercepted automatically.
+extra_local_networks = []
+
+# ============================================================================
+#  Geodata
+#
+#  Where the routing rule files come from. Refreshed daily by
+#  gw-geoupdate.timer and on demand with `gw update geo`. Downloads are
+#  size-checked and tested against the live Xray config before they replace
+#  the current files, with rollback if that fails.
+# ============================================================================
+[geodata]
+# A truncated .dat takes the tunnel down, and this runs unattended, so a file
+# smaller than this is refused rather than installed.
+min_bytes = 102400
+
+# Where routing data comes from. Several sources can be listed; they are fetched
+# in order, and when two provide a file of the same name the FIRST wins — the
+# same way every other precedence here works. The updater reports which source
+# each file came from, and what it skipped.
+#
+# Each source is one of two shapes:
+#   repo, no files   every *.dat in the latest release, so a new rule file
+#                    appearing upstream arrives on its own
+#   files            exactly those names, fetched through url_template
+#
+# Each is tracked separately, so the daily timer only downloads from a source
+# that has actually published something.
+[[geodata.source]]
+name = "iran"
+repo = "Chocolate4U/Iran-v2ray-rules"
+
+# A second set, pinned to specific files:
+# [[geodata.source]]
+# name         = "loyalsoldier"
+# files        = ["geoip", "geosite"]
+# url_template = "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/{0}.dat"
+
+# Kept but not fetched:
+# [[geodata.source]]
+# name    = "mirror"
+# enabled = false
+# files        = ["geoip", "geosite"]
+# url_template = "https://mirror.example.com/v2ray/{0}.dat"
+
+[dns]
+# LAN-facing resolver (AdGuard Home).
+adguard_port    = 53
+adguard_ui_port = 3000
+# Resolved through the tunnel. IP literals only — a hostname here would need
+# DNS to resolve the DNS server.
+upstreams_proxied = ["https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"]
+# Resolved direct, for domestic names. Shecan / ISP / national resolvers.
+upstreams_direct  = ["178.22.122.100", "185.51.200.2"]
+# Domains sent to upstreams_direct.
+direct_suffixes   = ["ir"]
+bootstrap         = ["1.1.1.1", "8.8.8.8"]
+# Redirect plain DNS from LAN clients to AdGuard whatever they are configured
+# to use, so a device only has to set its gateway. Note the limit: a client
+# pointed at the ROUTER resolves over the local segment and never reaches this
+# box at all — for those, set the router's DHCP to hand out this box as DNS.
+#
+# This matters beyond filtering. A filtering resolver answers blocked names
+# with a private address; the client then sends traffic there, and it is
+# dropped as unreachable. The symptom is one site failing while everything
+# else works.
+intercept = true
+
+blocklists = [
+  "https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt",
+  "https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt",
+]
+# Query log retention. Thin-client flash is small — keep this short.
+# AdGuard's own admin interface, on adguard_ui_port.
+#
+# It has its own password, but it is one more login on one more port, and it
+# reaches the resolver the whole LAN depends on. ui_enabled = false stops the
+# firewall opening the port at all; ui_allow_cidrs narrows who may reach it,
+# the same way the dashboard's allow_cidrs does. Empty = lan_cidr.
+ui_enabled     = true
+ui_allow_cidrs = []
+
+querylog_days = 3
+statslog_days = 7
+
+# ============================================================================
+#  Per-client policy
+#
+#  policy = "proxy"   intercepted and sent through Xray (split rules apply)
+#           "direct"  forwarded straight out to the router, never touched
+#           "block"   dropped at the gateway
+#           "<name>"  any profile declared above
+#
+#  Listing a device here is how you OVERRIDE the default. Any device that
+#  points its default gateway at this box gets [policy].default without being
+#  listed at all — listing is only needed to opt something out.
+#
+#  A device that never points its gateway here is simply unaffected: it never
+#  sends us a packet to match.
+#
+#  Give listed devices a static IP (or a router DHCP reservation) — policy is
+#  keyed to the address.
+#
+#  Listed devices also appear in AdGuard Home by name, so its query log reads
+#  in device names. `name` must be unique: AdGuard treats it as an identifier
+#  and refuses to start on a duplicate, which would take the LAN's DNS down.
+#  Whatever you then set against that device in the AdGuard UI — blocked
+#  services, its own upstreams, tags — stays put across `gw apply`.
+# ============================================================================
+
+[policy]
+# Applies to every device that uses this box as its gateway and is not listed
+# below. "proxy" means opting in is the only step: set the gateway, and the
+# traffic is tunnelled and covered by the kill switch.
+#
+# Must live in this table. A bare `default_policy = ...` written after another
+# [table] belongs to that table and is ignored — the loader rejects that now.
+default = "proxy"
+
+# Examples of overriding the default. Under default = "proxy" you do NOT need
+# an entry to proxy a device — just point its gateway here.
+
+[[client]]
+ip     = "192.168.1.60"
+name   = "tv"
+policy = "direct"
+
+[[client]]
+ip     = "192.168.1.99"
+name   = "iot-plug"
+policy = "block"
+
+# ============================================================================
+#  Tailscale
+# ============================================================================
+[tailscale]
+enabled        = true
+ssh            = true
+exit_node      = true      # advertise as exit node
+subnet_router  = true      # advertise lan_cidr to the tailnet
+# How traffic from a remote device using this box as its exit node is routed.
+# Any policy or profile name: "proxy" sends it out your main tunnel, "direct"
+# out your ISP, "block" drops it, and a profile name applies that profile's
+# rules — so a phone abroad can reach the work upstream exactly like the work
+# laptop does.
+exit_node_policy = "proxy"
+# Route tailscaled's own control-plane + DERP traffic through Xray. Needed if
+# Tailscale is blocked upstream. Cost: when Xray dies, so does your remote
+# admin path — hence the lifeline below.
+route_control_via_xray = true
+# After this many minutes of sustained tunnel failure, let tailscaled talk
+# direct so you can still SSH in and fix things. 0 disables the lifeline.
+lifeline_after_min = 10
+
+# ============================================================================
+#  Web dashboard
+#
+#  Status + client management, served by the box itself. Three independent
+#  gates, because this thing can change the firewall:
+#    1. nftables only accepts the port from allow_cidrs
+#    2. the app re-checks the peer address against allow_cidrs
+#    3. a password (set with `gw web-passwd`, scrypt-hashed outside the repo)
+#
+#  The peer address comes from the socket. X-Forwarded-For is deliberately
+#  ignored — nothing proxies this, so a header claiming otherwise is a lie.
+# ============================================================================
+[web]
+enabled = true
+listen  = "0.0.0.0"
+port    = 8088
+
+# Self-signed by default (scripts/40-web.sh generates it). Your browser will
+# warn once. It is worth it: the login password crosses the LAN otherwise.
+# A LAN attacker can still substitute their own cert and you would click
+# through — reach it over Tailscale if that matters to you.
+tls  = true
+cert = "/etc/gateway/web.crt"
+key  = "/etc/gateway/web.key"
+
+# Who may reach the dashboard at all. Empty = lan_cidr + the tailnet.
+#
+# List only what should reach it to narrow that: ["100.64.0.0/10"] makes the
+# dashboard reachable over Tailscale and not from the LAN, which is a good
+# setting for a household where the LAN has guests on it. To close it off
+# entirely, set enabled = false above.
+allow_cidrs = []
+
+session_hours     = 12
+max_failed_logins = 5
+lockout_minutes   = 15
+
+# ============================================================================
+#  Scheduled jobs
+#
+#  Bash on a cron schedule, rendered into /etc/cron.d/gw-jobs with each script
+#  in its own file under /usr/local/lib/gateway/jobs/. The crontab only ever
+#  names a script, because cron treats % in a crontab line as a newline and
+#  silently truncates there.
+#
+#  Manage them with `gw job add|rm|enable|disable|list`, or from the dashboard.
+#  Entries written by those tools live in a marked region at the end of this
+#  file; anything you write by hand elsewhere still runs and is left alone.
+#
+#  Use ''' for the script (a TOML *literal* string). The """ form processes
+#  escapes, so a bash line continuation would be collapsed and a backslash-n
+#  would become a real newline — quietly changing what actually runs.
+#
+#  Jobs run as root unless `user` says otherwise. That makes the dashboard's
+#  job editor the most powerful thing on the box: treat access to it as root
+#  access to the gateway.
+# ============================================================================
+
+# [[job]]
+# name        = "backup-config"
+# description = "Copy the AdGuard config somewhere safe"
+# schedule    = "0 4 * * *"     # five cron fields, or @daily / @hourly / ...
+# user        = "root"
+# enabled     = true
+# script      = '''
+# install -d /var/backups/gateway
+# cp -a /opt/AdGuardHome/AdGuardHome.yaml /var/backups/gateway/agh-$(date +%F).yaml
+# '''
+
+# ============================================================================
+#  Performance
+#
+#  Measure before changing any of this: `sudo gw bench` reports the link
+#  speed, whether the CPU has AES acceleration, and throughput through the
+#  tunnel against throughput bypassing it — which is what says whether the
+#  bottleneck is Xray, the LAN, or your upstream.
+#
+#  The usual answer for a client at roughly half speed is neither Xray nor
+#  this config: intercepted traffic crosses the single NIC twice, once
+#  inbound from the client and once outbound to the internet. A 100 Mb/s link
+#  therefore caps clients near 50 Mb/s. A second NIC removes that ceiling.
+# ============================================================================
+[performance]
+# Xray's per-connection buffer, in KB. Left alone by default, and that is
+# deliberate: shrinking it caps throughput on a high-latency path, because the
+# buffer has to hold a bandwidth-delay product and a censored route is usually
+# a long one. 40 Mb/s at 200 ms needs about 1 MB in flight — a 64 KB buffer
+# would cost you most of the line. Only set this if `gw bench` shows the
+# tunnel is the bottleneck AND you have measured the difference.
+# buffer_size_kb = 512
+
+# Congestion control for outbound sockets. BBR helps most on a lossy path,
+# which a censored route usually is. Needs the bbr module (00-bootstrap
+# enables it). Empty leaves whatever the outbound JSON specifies.
+tcp_congestion = "bbr"
+
+# Disable Nagle on outbound sockets: better latency, marginally more overhead.
+tcp_no_delay = true
+
+# How long an idle connection is held open, in seconds.
+conn_idle_sec = 300
+
+# ============================================================================
+#  Health watchdog
+# ============================================================================
+[health]
+interval_sec        = 30
+probe_url           = "https://www.gstatic.com/generate_204"
+probe_timeout_sec   = 8
+# A domestic site, used by `gw check` to prove the split is really splitting.
+domestic_probe_url  = "https://www.irna.ir"
+restart_after_fails = 3     # consecutive failures before restarting Xray
+fallback_after_fails = 6    # before switching to [xray.fallback]
+
+# ============================================================================
+#  System
+# ============================================================================
+[system]
+timezone         = "Asia/Tehran"
+journal_max_use  = "200M"
+zram             = true
+bbr              = true
+unattended_upgrades = true
+
+# What the scheduled updater does, and when. Geodata has its own daily timer
+# regardless; this covers everything else, which otherwise only ever updated
+# when someone remembered to run `gw update` by hand.
+#
+#   off        no timer at all
+#   check      report what is available, change nothing (journal + `gw logs`)
+#   services   geodata, Xray and AdGuard Home  <- the default
+#   all        the above plus a full `apt upgrade`, then re-apply the config
+#
+# "services" is the default because each of those three tests itself and rolls
+# back if the new version will not start, which an unattended `apt upgrade` on
+# the box the whole house routes through does not. Security patches still
+# arrive through unattended_upgrades above.
+auto_update          = "services"
+auto_update_schedule = "weekly"   # any systemd OnCalendar: "Sun 04:00", "daily"
+# SSH stays reachable from these sources only.
+ssh_allow_lan    = true
+ssh_allow_tailnet = true

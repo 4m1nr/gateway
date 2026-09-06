@@ -1,0 +1,25 @@
+[Unit]
+Description=Xray transparent gateway (whole stack)
+Documentation=file:///opt/gateway/README.md
+
+# Everything the gateway needs at boot, in one place:
+#   systemctl status  gateway.target   what's up
+#   systemctl restart gateway.target   restart the stack (PartOf propagates)
+#   systemctl stop    gateway.target   tear it down
+#   systemctl list-dependencies gateway.target
+#
+# Wants=, not Requires=: a failed AdGuard should not take the tunnel with it,
+# and a failed tunnel should not stop DNS from serving the LAN.
+Wants=gw-network.service
+Wants=xray.service
+Wants=gw-health.timer
+Wants=gw-geoupdate.timer
+Wants=AdGuardHome.service
+After=AdGuardHome.service
+Wants=gw-web.service
+Wants=tailscaled.service
+
+After=gw-network.service xray.service
+
+[Install]
+WantedBy=multi-user.target

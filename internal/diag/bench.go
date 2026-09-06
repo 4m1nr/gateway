@@ -12,19 +12,23 @@ import (
 
 // BenchResult is what a throughput measurement found.
 type BenchResult struct {
-	Interface   string  `json:"interface"`
-	LinkSpeed   int     `json:"link_speed_mbits"` // -1 when unknown
-	Duplex      string  `json:"duplex"`
-	RxDrop      int64   `json:"rx_drop"`
-	TxDrop      int64   `json:"tx_drop"`
-	Cores       int     `json:"cores"`
-	CPUModel    string  `json:"cpu_model"`
-	AESNI       bool    `json:"aes_ni"`
-	DirectMbps  float64 `json:"direct_mbits"`
-	TunnelMbps  float64 `json:"tunnel_mbits"`
-	DirectBytes int64   `json:"direct_bytes"`
-	TunnelBytes int64   `json:"tunnel_bytes"`
-	CPUBusyPct  int     `json:"cpu_busy_pct"`
+	Interface string `json:"interface"`
+	// LANInterface is the second card on a two-armed box, and empty otherwise.
+	// It changes the verdict: the hairpin that halves a single-NIC gateway does
+	// not happen when traffic comes in one card and leaves the other.
+	LANInterface string  `json:"lan_interface,omitempty"`
+	LinkSpeed    int     `json:"link_speed_mbits"` // -1 when unknown
+	Duplex       string  `json:"duplex"`
+	RxDrop       int64   `json:"rx_drop"`
+	TxDrop       int64   `json:"tx_drop"`
+	Cores        int     `json:"cores"`
+	CPUModel     string  `json:"cpu_model"`
+	AESNI        bool    `json:"aes_ni"`
+	DirectMbps   float64 `json:"direct_mbits"`
+	TunnelMbps   float64 `json:"tunnel_mbits"`
+	DirectBytes  int64   `json:"direct_bytes"`
+	TunnelBytes  int64   `json:"tunnel_bytes"`
+	CPUBusyPct   int     `json:"cpu_busy_pct"`
 }
 
 // Ratio is the tunnel's throughput as a percentage of direct.
@@ -50,9 +54,14 @@ func (b BenchResult) Verdict() string {
 	case b.LinkSpeed > 0 && b.DirectMbps < float64(b.LinkSpeed)/2*0.8:
 		return "direct is already well under half the link speed, so the bottleneck " +
 			"is upstream of this box, not the gateway."
+	case b.LANInterface != "":
+		return "the tunnel keeps up here, and traffic does not hairpin — it comes " +
+			"in " + b.LANInterface + " and leaves " + b.Interface + ". A slower " +
+			"client is the LAN path itself: cabling, the switch, or the client."
 	default:
 		return "the tunnel keeps up here, so a slower client is the LAN path: " +
-			"one NIC carries intercepted traffic twice."
+			"one NIC carries intercepted traffic twice. A second card removes " +
+			"that ceiling — see 'Two network cards' in the README."
 	}
 }
 
@@ -67,10 +76,11 @@ func (c Collector) Bench(url string) (BenchResult, error) {
 	}
 	env := readEnv(c.envPath())
 	res := BenchResult{
-		Interface: env["WAN_IF"],
-		LinkSpeed: -1,
-		Duplex:    "?",
-		Cores:     numCPU(),
+		Interface:    env["WAN_IF"],
+		LANInterface: env["LAN_IF"],
+		LinkSpeed:    -1,
+		Duplex:       "?",
+		Cores:        numCPU(),
 	}
 	if res.Interface == "" {
 		return res, fmt.Errorf("no WAN interface is known — has `gw apply` run?")

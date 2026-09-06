@@ -134,9 +134,21 @@ fi
 
 # --- the risky part -------------------------------------------------------
 WAN=$(sed -n 's/^wan_if *= *"\(.*\)"/\1/p' "$CONFIG" | head -1)
-info "switching network management to systemd-networkd on $WAN"
+# Empty unless this is a two-armed box: one card on the office LAN, one facing
+# the internet. Commented-out examples in the config do not match, because the
+# pattern is anchored at the start of the line.
+LAN_IF=$(sed -n 's/^lan_if *= *"\(.*\)"/\1/p' "$CONFIG" | head -1)
+LINKS="$WAN"
+[ -n "$LAN_IF" ] && LINKS="$WAN and $LAN_IF"
+
+info "switching network management to systemd-networkd on $LINKS"
 warn "This replaces the current network configuration. If you are on SSH over"
-warn "$WAN, the connection will drop and come back on the static address."
+if [ -n "$LAN_IF" ]; then
+  warn "either card, the connection will drop and come back on the new address."
+  warn "$LAN_IF gets the static address the LAN points at; $WAN faces the uplink."
+else
+  warn "$WAN, the connection will drop and come back on the static address."
+fi
 confirm "continue?"
 
 # Keep name resolution alive until AdGuard takes over in 20-adguard.sh.
@@ -157,6 +169,14 @@ info "staging the gateway configuration"
 
 install -D -m 0644 "$REPO/build/etc/systemd/network/10-gateway-wan.network" \
   /etc/systemd/network/10-gateway-wan.network
+# Rendered only for a two-armed box, so its absence is the single-NIC case
+# rather than a missing file.
+if [ -f "$REPO/build/etc/systemd/network/15-gateway-lan.network" ]; then
+  install -D -m 0644 "$REPO/build/etc/systemd/network/15-gateway-lan.network" \
+    /etc/systemd/network/15-gateway-lan.network
+else
+  rm -f /etc/systemd/network/15-gateway-lan.network
+fi
 install -D -m 0644 "$REPO/build/etc/sysctl.d/99-gateway.conf" \
   /etc/sysctl.d/99-gateway.conf
 sysctl --system >/dev/null
@@ -165,17 +185,42 @@ systemctl restart systemd-networkd
 sleep 3
 
 info "checking connectivity"
+# Under net.wan_dhcp there is no router in the config to ping: the lease carries
+# it. Ask the kernel what it learned instead, which also proves the lease
+# arrived at all — the failure this check exists to catch.
+if [ -z "$ROUTER" ]; then
+  ROUTER=$(ip -4 route show default dev "$WAN" | awk '{print $3; exit}')
+  if [ -z "$ROUTER" ]; then
+    die "no default route on $WAN — net.wan_dhcp is set but no lease arrived.
+    Check the cable and 'networkctl status $WAN'."
+  fi
+  info "learned the gateway $ROUTER from the lease on $WAN"
+fi
 if ping -c2 -W3 "$ROUTER" >/dev/null 2>&1; then
   info "router $ROUTER reachable"
 else
   die "cannot reach the router at $ROUTER — check net.static_ip and net.wan_if in $CONFIG"
 fi
 
+if [ -n "$LAN_IF" ]; then
+  # The LAN card carries the address every office device points at. A typo in
+  # net.lan_if leaves it on nothing, and the symptom is the whole office
+  # offline with the box itself perfectly happy on the uplink.
+  if ip -4 addr show dev "$LAN_IF" 2>/dev/null | grep -q 'inet '; then
+    info "$LAN_IF is up on the LAN side"
+  else
+    die "$LAN_IF has no address — check net.lan_if in $CONFIG names a real card
+    ('ip -br link' lists them)"
+  fi
+fi
+
 cat <<'NEXT'
 
 Base system ready. Before proxying anything, confirm plain forwarding works:
 
-  1. On another device, set its gateway to this box's static IP.
+  1. On another device, set its gateway to this box's static IP. On a
+     two-armed box that device is already behind it — plug it into the LAN
+     side and it has no other way out.
   2. sudo nft -f - <<'RULE'
      table ip tmpnat { chain post { type nat hook postrouting priority srcnat; masquerade } }
 RULE

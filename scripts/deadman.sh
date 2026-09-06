@@ -42,6 +42,9 @@ UNIT=gw-deadman
 ROOT="${GW_ROOT:-}"
 RESOLV="$ROOT/etc/resolv.conf"
 WAN_NETWORK="$ROOT/etc/systemd/network/10-gateway-wan.network"
+# Two-armed boxes only. Absent on a single-NIC one, which is not a failure:
+# every use below tests for the file first.
+LAN_NETWORK="$ROOT/etc/systemd/network/15-gateway-lan.network"
 GW_SYSCTL="$ROOT/etc/sysctl.d/99-gateway.conf"
 IP_RULES="$ROOT/usr/local/lib/gateway/ip-rules.sh"
 
@@ -107,6 +110,14 @@ do_snapshot() {
   else
     rm -f "$STATE/wan.network"
   fi
+  # The LAN side of a two-armed box, recorded the same way and for the same
+  # reason: restoring one card and not the other leaves the box half converted,
+  # which is worse than either end state.
+  if [ -f "$LAN_NETWORK" ]; then
+    cp -a "$LAN_NETWORK" "$STATE/lan.network"
+  else
+    rm -f "$STATE/lan.network"
+  fi
 
   : > "$STATE/units"
   local u en ac
@@ -134,6 +145,7 @@ do_snapshot() {
   # from the config the same way bootstrap does; it may not exist yet.
   if [ -f "$CONFIG" ]; then
     sed -n 's/^wan_if *= *"\(.*\)"/\1/p' "$CONFIG" | head -1 > "$STATE/wan_if"
+    sed -n 's/^lan_if *= *"\(.*\)"/\1/p' "$CONFIG" | head -1 > "$STATE/lan_if"
     sed -n 's/^router *= *"\(.*\)"/\1/p' "$CONFIG" | head -1 > "$STATE/router"
   fi
 
@@ -145,6 +157,16 @@ do_snapshot() {
 
   log "snapshot taken"
   info "snapshot in $STATE"
+}
+
+# flush_links drops every address off each named interface. Takes zero or more
+# names, so a single-NIC box and a two-armed one go through the same call.
+flush_links() {
+  local link
+  for link in "$@"; do
+    [ -n "$link" ] || continue
+    ip addr flush dev "$link" >/dev/null 2>&1 || true
+  done
 }
 
 # ------------------------------------------------------------------- restore --
@@ -199,6 +221,12 @@ do_restore() {
     rm -f "$WAN_NETWORK"
     log "removed the generated .network file"
   fi
+  if [ -f "$STATE/lan.network" ]; then
+    install -D -m 0644 "$STATE/lan.network" "$LAN_NETWORK"
+    log "restored the LAN-side .network file that was already installed"
+  else
+    rm -f "$LAN_NETWORK"
+  fi
   rm -f "$GW_SYSCTL"
   sysctl --system >/dev/null 2>&1 || true
 
@@ -212,23 +240,29 @@ do_restore() {
   # which is what a re-run of bootstrap records — is what made a rollback look
   # like it had done nothing: the file was removed and the box sat on the static
   # address it was stranded by until someone power-cycled it.
-  local wan prev_networkd
+  # Both cards on a two-armed box. Flushing only the uplink would leave the
+  # office LAN still pointed at an address this box is no longer gatewaying for,
+  # which looks exactly like the failure the rollback was meant to end.
+  local wan lan prev_networkd links=""
   wan=$(cat "$STATE/wan_if" 2>/dev/null || true)
+  lan=$(cat "$STATE/lan_if" 2>/dev/null || true)
+  [ -n "$wan" ] && links="$wan"
+  [ -n "$lan" ] && links="${links:+$links }$lan"
   prev_networkd=$(awk '$1=="systemd-networkd.service"{print $2}' "$STATE/units" 2>/dev/null || true)
   if [ "$prev_networkd" = "enabled" ]; then
     # networkd stays, but must forget our config. Flush first: a restart alone
     # reapplies configuration without withdrawing what is already on the link.
-    # `|| true`: with no wan_if recorded the test is false, and under set -e a
-    # failing && list would abort the rollback here — halfway through.
-    [ -n "$wan" ] && ip addr flush dev "$wan" >/dev/null 2>&1 || true
+    # `|| true`: with no interface recorded the loop is empty, and under set -e
+    # a failing command would abort the rollback here — halfway through.
+    flush_links $links || true
     systemctl restart systemd-networkd >/dev/null 2>&1 || true
-    log "networkd owned this link before; flushed ${wan:-it} and restarted it"
+    log "networkd owned ${links:-the link} before; flushed and restarted it"
   else
     # Another manager owned it. Stop networkd BEFORE flushing, or it simply
     # puts the address back on.
     systemctl stop systemd-networkd.socket systemd-networkd.service >/dev/null 2>&1 || true
-    [ -n "$wan" ] && ip addr flush dev "$wan" >/dev/null 2>&1 || true
-    log "stopped networkd and flushed ${wan:-the link}"
+    flush_links $links || true
+    log "stopped networkd and flushed ${links:-the link}"
   fi
 
   # 5. Put the tracked units back exactly as they were. Enable/disable first

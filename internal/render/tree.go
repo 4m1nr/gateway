@@ -88,6 +88,17 @@ func Build(c *config.Config, opt Options) ([]File, error) {
 	}
 	contents["etc/systemd/network/10-gateway-wan.network"] = network
 
+	// Two-armed only, and absent otherwise — a unit matching an interface that
+	// does not exist is not harmless: networkd would hold it unconfigured and
+	// systemd-networkd-wait-online has one more link to wait for.
+	lan, err := NetworkLAN(c)
+	if err != nil {
+		return nil, err
+	}
+	if lan != "" {
+		contents["etc/systemd/network/15-gateway-lan.network"] = lan
+	}
+
 	// Ordering makes this necessary rather than optional: gw-network adds the
 	// policy rules before network-pre.target, and networkd deletes every rule
 	// it did not configure when it starts, which is after that.

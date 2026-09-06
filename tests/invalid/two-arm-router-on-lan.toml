@@ -1,0 +1,10 @@
+[net]
+wan_if = "eth0"
+lan_if = "eth1"
+lan_cidr = "192.168.1.0/24"
+static_ip = "192.168.1.2"
+wan_ip = "10.0.0.2"
+router = "192.168.1.1"
+[xray]
+[xray.outbound]
+file = "outbounds/main.json"

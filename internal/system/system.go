@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"sort"
 	"strings"
 	"time"
 )
@@ -85,6 +86,103 @@ func (s Systemd) DaemonReload() error {
 func (s Systemd) Restart(unit string) error {
 	_, err := s.run("systemctl", "restart", unit)
 	return err
+}
+
+// ReconfigureLinks makes systemd-networkd adopt the freshly installed .network
+// files, and leaves each link carrying exactly the address the config names.
+//
+// Both halves are needed, and the second is the surprising one. Installing a
+// .network file tells networkd nothing — the change appears at the next reboot
+// and not before. And when networkd does re-read it, it adds the new address
+// and KEEPS the old one: it does not withdraw an address merely because the
+// configuration that set it is gone. Renumbering a box therefore left the card
+// holding both addresses, the old one still answering, with nothing anywhere
+// saying which was meant to be there.
+//
+// links maps an interface to the address it should carry, as "10.0.0.2/24".
+// An empty value means the address comes from a lease; nothing is pruned there,
+// because there is no configured address to compare against.
+func (s Systemd) ReconfigureLinks(links map[string]string) ([]string, error) {
+	if len(links) == 0 {
+		return nil, nil
+	}
+	// A box that does not use networkd has nothing to reconfigure, and that is
+	// not a failure: `gw apply` runs on boxes partway through bootstrap, before
+	// the switch to networkd has happened.
+	if _, err := exec.LookPath("networkctl"); err != nil {
+		return nil, nil
+	}
+	names := make([]string, 0, len(links))
+	for name := range links {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	// reload, not restart: a restart takes every link down for a moment, on a
+	// box whose LAN is served through it.
+	if _, err := s.run("networkctl", "reload"); err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		if _, err := s.run("networkctl", "reconfigure", name); err != nil {
+			return nil, err
+		}
+	}
+
+	var removed []string
+	for _, name := range names {
+		want := links[name]
+		if want == "" {
+			continue
+		}
+		stale, err := s.pruneAddresses(name, want)
+		removed = append(removed, stale...)
+		if err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
+// pruneAddresses removes every permanent global IPv4 address on a link except
+// the one the config names.
+//
+// Scoped tightly on purpose. Only IPv4, only global scope — link-local and the
+// loopback range are the kernel's business. And never a "dynamic" address: that
+// came from a lease rather than from this config, so there is no configured
+// value it can be judged against, and deleting it would cut the uplink on a box
+// running wan_dhcp.
+func (s Systemd) pruneAddresses(iface, want string) ([]string, error) {
+	out, err := s.run("ip", "-4", "-o", "addr", "show", "dev", iface, "scope", "global")
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == "" || strings.Contains(line, " dynamic ") {
+			continue
+		}
+		addr := inetAddr(line)
+		if addr == "" || addr == want {
+			continue
+		}
+		if _, err := s.run("ip", "addr", "del", addr, "dev", iface); err != nil {
+			return removed, err
+		}
+		removed = append(removed, iface+" "+addr)
+	}
+	return removed, nil
+}
+
+// inetAddr pulls the CIDR out of one `ip -o addr` line, or "" if there is none.
+func inetAddr(line string) string {
+	fields := strings.Fields(line)
+	for i, f := range fields {
+		if f == "inet" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
 }
 
 // Start starts a unit.

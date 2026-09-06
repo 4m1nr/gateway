@@ -17,6 +17,11 @@ the LAN, and it joins your tailnet as a subnet router and exit node.
     gw=box  gw=router  gw=box       eth0 only      via tailscale0
 ```
 
+That is the **one-armed** setup: one NIC, the box beside the router on a single
+segment, and devices opt in by pointing at it. With two network cards it can sit
+*between* the office and the internet instead, where opting in is not a step
+anyone takes — see [Two network cards](#two-network-cards).
+
 Everything is generated from **one file**: `gateway.toml`. You never edit
 configs on the box — you edit that file and run `gw apply`.
 
@@ -93,6 +98,99 @@ override is keyed to the address. Change the default itself in `gateway.toml`:
 [policy]
 default = "proxy"   # or "direct" / "block"
 ```
+
+## Two network cards
+
+An office box usually has two NICs, and then the shape changes: one card faces
+the office LAN, the other faces the internet, and the gateway sits **between**
+them rather than beside the router.
+
+```
+        internet
+            │
+          modem / ISP router
+            │
+        eth0 │  10.0.0.2      ← the uplink. DHCP, or an address you set
+      ┌──────────────┐
+      │ thin client  │          all traffic crosses here. there is no way past.
+      └──────────────┘
+        eth1 │  192.168.10.1  ← the LAN's gateway, and its DNS
+            │
+          switch
+        ┌───┴───┬───────┬───────┐
+      laptop   phone   TV    printer      (nothing configured on any of them)
+```
+
+The difference that matters is not the wiring, it is that **opting in stops
+being a per-device step**. On the LAN side this box is the only way out, so
+`[policy].default` governs the whole office rather than only the devices that
+asked for it. Set it deliberately:
+
+```toml
+[policy]
+default = "proxy"   # everything, unless listed below
+```
+
+`gw client add` still works the same way, for the exceptions.
+
+### Configuring it
+
+`gw init` asks when it finds a second card. To convert an existing config by
+hand, add `lan_if` and give the uplink its own address:
+
+```toml
+[net]
+wan_if     = "eth0"          # facing the internet
+lan_if     = "eth1"          # facing the office
+lan_cidr   = "192.168.10.0/24"
+static_ip  = "192.168.10.1"  # this box — now the LAN's gateway
+prefix_len = 24
+
+wan_dhcp   = true            # take the uplink address from the ISP router
+# — or set it by hand, and put the router on that side:
+# wan_ip          = "10.0.0.2"
+# wan_prefix_len  = 24
+# router          = "10.0.0.1"
+```
+
+Setting `lan_if` changes what two of the keys above mean, and the validator
+enforces both: `static_ip` becomes the LAN's gateway, and `router` moves to the
+uplink network and must **not** be inside `lan_cidr` any more. Under `wan_dhcp`
+there is no `router` at all — naming one is rejected rather than ignored.
+
+### DHCP stays where it is
+
+**This box does not hand out addresses.** Whatever already serves DHCP on the
+office LAN keeps doing it — a switch, an AP, a server — it just has to advertise
+`static_ip` as **both the gateway and the DNS server**.
+
+Both halves matter, for the same reason they do one-armed: a device that keeps
+resolving through something else gets a private address for a blocked name,
+sends real traffic there, and the gateway drops it as unreachable. One site
+fails, everything else works, and nothing says why.
+
+### What changes on the box
+
+Nothing you have to do, but worth knowing what `gw apply` renders differently:
+
+- a second networkd unit, `15-gateway-lan.network`, for the LAN card. It has no
+  `Gateway=` — the default route belongs to the uplink — and is not required for
+  boot, so a dark office switch cannot hold the box offline.
+- the uplink unit takes `DHCP=ipv4` under `wan_dhcp`, with `UseDNS=no`. Without
+  that last line networkd hands the lease's resolver to the box ahead of
+  AdGuard, and it resolves around its own filtering with nothing looking wrong.
+- an anti-spoof drop in the firewall: nothing arriving on the internet card may
+  claim a LAN source. One-armed there is no such rule, because there is no
+  "other side" for a packet to arrive from.
+- `rp_filter` and the IPv6 disable cover both cards. The LAN one matters most —
+  it is the card clients are on.
+- the uplink's own segment is kept out of the poisoned-DNS drop, so the modem's
+  address stays reachable. Under `wan_dhcp` that segment is not known when the
+  ruleset is generated; name it in `routing.extra_local_networks` if you need
+  the LAN to reach it.
+
+`sudo gw check` verifies the LAN card is up, carries exactly the address the
+config names, and — under `wan_dhcp` — that a lease actually arrived.
 
 ### Profiles
 
@@ -573,7 +671,7 @@ when you need it. Client traffic stays fail-closed regardless.
 
 ## Things worth knowing
 
-- **IPv6 is off**, on the router and on `eth0`. A client's v6 default route
+- **IPv6 is off**, on the router and on every card this box manages. A client's v6 default route
   comes from Router Advertisements, not from the gateway setting you configure
   per device — so a dual-stacked client would keep using the router for v6 and
   bypass the tunnel silently. Disabling it removes the leak path. It's disabled
@@ -581,8 +679,15 @@ when you need it. Client traffic stays fail-closed regardless.
 - **The clock is load-bearing.** TLS and REALITY both fail on skew, and it looks
   like a broken tunnel. NTP is pinned to a direct path so time sync can never
   depend on the tunnel.
-- **Single NIC** means bypassed traffic hairpins through one port. Fine at home
-  speeds; ICMP redirects are disabled so clients can't be told to skip the box.
+- **A single NIC** means bypassed traffic hairpins through one port. Fine at
+  home speeds; ICMP redirects are disabled so clients can't be told to skip the
+  box. With [two cards](#two-network-cards) it does not hairpin at all.
+- **Renumbering takes effect on `gw apply`.** Installing a `.network` file tells
+  networkd nothing on its own, and when it does re-read one it adds the new
+  address and keeps the old — so changing `static_ip` used to leave the card
+  carrying both, the old one still answering. Apply now reconfigures the link
+  and removes the address the config no longer names, reporting each one it
+  drops. An address from a DHCP lease is never touched.
 - **AdGuard's admin password** is the one thing not managed here — a password
   hash doesn't belong in a git repo. Set it in the web UI; `gw apply` leaves it
   and anything else you set there alone.
