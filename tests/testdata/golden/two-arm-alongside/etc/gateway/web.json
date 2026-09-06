@@ -1,0 +1,14 @@
+{
+  "listen": "0.0.0.0",
+  "port": 8088,
+  "tls": true,
+  "cert": "/etc/gateway/web.crt",
+  "key": "/etc/gateway/web.key",
+  "allow_cidrs": [
+    "192.168.1.0/24",
+    "100.64.0.0/10"
+  ],
+  "session_hours": 12,
+  "max_failed_logins": 5,
+  "lockout_minutes": 15
+}

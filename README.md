@@ -101,9 +101,9 @@ default = "proxy"   # or "direct" / "block"
 
 ## Two network cards
 
-An office box usually has two NICs, and then the shape changes: one card faces
-the office LAN, the other faces the internet, and the gateway sits **between**
-them rather than beside the router.
+An office box usually has two NICs: one card faces the office LAN, the other
+faces the internet, and an intercepted flow arrives on one and leaves on the
+other instead of crossing a single port twice.
 
 ```
         internet
@@ -112,7 +112,7 @@ them rather than beside the router.
             │
         eth0 │  10.0.0.2      ← the uplink. DHCP, or an address you set
       ┌──────────────┐
-      │ thin client  │          all traffic crosses here. there is no way past.
+      │ thin client  │          every device on the LAN is behind this box
       └──────────────┘
         eth1 │  192.168.10.1  ← the LAN's gateway, and its DNS
             │
@@ -121,17 +121,51 @@ them rather than beside the router.
       laptop   phone   TV    printer      (nothing configured on any of them)
 ```
 
-The difference that matters is not the wiring, it is that **opting in stops
-being a per-device step**. On the LAN side this box is the only way out, so
-`[policy].default` governs the whole office rather than only the devices that
-asked for it. Set it deliberately:
+That diagram is one of two placements, and the config does not distinguish
+them — the difference is the wiring, and it decides whether opting in is still
+a per-device step.
 
-```toml
-[policy]
-default = "proxy"   # everything, unless listed below
+**Inline**, as drawn above: the LAN has no other router, so this box is the
+only way out and every device is behind it. `[policy].default` then governs the
+whole office rather than only the devices that asked for it, and `gw client add`
+is for the exceptions. Set the default deliberately before you wire it.
+
+**Alongside:** the LAN keeps its own router and its own DHCP, this box is just
+another device on it, and the second card is a dedicated way *out* rather than
+the only way out. Devices opt in exactly as they do with one NIC — point the
+gateway and DNS here — and everything else carries on through the router,
+untouched.
+
+```
+                 internet
+                    │
+                  modem
+                    │  eth0   the box's own way out
+              ┌───────────┐
+              │    box    │
+              └───────────┘
+                    │  eth1   192.168.1.2
+   router.1 ───── switch ───── laptop   TV   printer
+                                  point at .2 to opt in,
+   still serving DHCP, and        or carry on through the router
+   still the default for
+   anyone who has not
 ```
 
-`gw client add` still works the same way, for the exceptions.
+Nothing on the LAN is renumbered and nothing needs a new DHCP server. What you
+get is the throughput: an intercepted flow arrives on one card and leaves on
+the other instead of crossing a single NIC twice, so the halving described in
+[troubleshooting](docs/troubleshooting.md) goes away. That is often the only
+reason to add a card at all.
+
+The opt-in property survives because of how Ethernet works rather than anything
+in the config: a device using the router as its gateway addresses those frames
+to the router, and this box never sees them. Nothing has to exclude it, because
+there is nothing to exclude. It is the same reason opting in works with one NIC.
+
+What "alongside" needs is a genuinely separate path out for `wan_if` — a modem,
+a second line, or a router port on its own subnet. The two sides cannot share
+a network, and the validator refuses a config where they overlap.
 
 Converting a box that is **already running** is its own procedure, because
 there are devices depending on it while you work:
@@ -139,8 +173,9 @@ there are devices depending on it while you work:
 
 ### Configuring it
 
-`gw init` asks when it finds a second card. To convert an existing config by
-hand, add `lan_if` and give the uplink its own address:
+Both placements are the same four lines. `gw init` asks when it finds a second
+card; to convert an existing config by hand, add `lan_if` and give the uplink
+its own address:
 
 ```toml
 [net]
@@ -195,6 +230,12 @@ Nothing you have to do, but worth knowing what `gw apply` renders differently:
 
 `sudo gw check` verifies the LAN card is up, carries exactly the address the
 config names, and — under `wan_dhcp` — that a lease actually arrived.
+
+One thing to weigh if `wan_if` goes straight to a modem: the box is then on the
+internet directly, and the input chain is the only thing between them. It is
+default-drop, SSH is restricted to the LAN and the dashboard to
+`web.allow_cidrs`, so this is a supported place to be — but it is a different
+exposure from sitting behind a router, and worth knowing you have chosen it.
 
 ### Profiles
 

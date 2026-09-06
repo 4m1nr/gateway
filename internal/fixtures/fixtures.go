@@ -76,11 +76,24 @@ file    = "outbounds/backup.json"`)
 		// Two-armed the router lives on the uplink, not on the LAN.
 		return b.sub(t, `router     = "192.168.1.1"`, `router     = "10.0.0.1"`)
 	})
-	b.derive("two-arm-dhcp", example, func(t string) string {
-		t = twoArm(t)
+	dhcpUplink := func(t string) string {
 		t = b.sub(t, `#wan_dhcp   = true`, `wan_dhcp   = true`)
 		// The lease carries the gateway, so naming one here is an error.
 		return b.subRE(t, regexp.MustCompile(`(?m)^router     = "192\.168\.1\.1"\n`), "")
+	}
+	b.derive("two-arm-dhcp", example, func(t string) string {
+		return dhcpUplink(twoArm(t))
+	})
+
+	// Two cards, and the box is NOT the LAN's gateway: the segment keeps its
+	// own router, devices opt in by pointing here, and the second card is a
+	// dedicated way out rather than the only way out. Nothing in the config
+	// says which of the two it is -- the difference is the wiring -- but the
+	// default policy that goes with it exercises a path the other two-armed
+	// fixtures do not: the LAN masquerade in postrouting.
+	b.derive("two-arm-alongside", example, func(t string) string {
+		t = dhcpUplink(twoArm(t))
+		return b.subRE(t, regexp.MustCompile(`(?m)^default = "proxy"$`), `default = "direct"`)
 	})
 
 	b.derive("no-web", example, func(t string) string {

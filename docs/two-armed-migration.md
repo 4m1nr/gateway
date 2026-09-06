@@ -11,17 +11,50 @@ Read the whole thing before starting. The short version:
 - **The uplink segment never has to move.** The recommended path leaves the
   router untouched on the network it already serves, so the box keeps its own
   internet — and your tailnet access — whichever card you point at it.
-- **The office LAN gets a new subnet**, and something on it has to serve DHCP.
-  This box does not. Sorting that out is the part that takes planning; the
-  gateway change itself is four lines of config.
+- **Check whether you need to be inline at all.** Putting the box *alongside*
+  the LAN's existing router — same address, same DHCP, devices still opting in
+  — removes the single-NIC throughput ceiling and changes nothing else. If that
+  is what you were after, most of this document does not apply to you.
+- **Inline, the office LAN gets a new subnet**, and something on it has to
+  serve DHCP. This box does not. Sorting that out is the part that takes
+  planning; the gateway change itself is four lines of config.
 - **Which card faces which way is your choice**, and it is only a choice about
   which name goes on which config line. There is one argument for a preference
   and it is in [Two decisions](#two-decisions-and-they-are-independent).
 
-## What actually changes
+## First: are you sure you want to be inline?
+
+Two cards do not oblige the box to be the LAN's gateway, and this document
+originally assumed they did. There are two placements, the config does not
+distinguish them, and the cheaper one may be all you need.
+
+**Alongside.** The LAN keeps its own router and its own DHCP. The box stays a
+device on it at the address it already has, and the second card becomes a
+dedicated way *out* — into a modem, a second line, or a router port on its own
+subnet. Devices opt in exactly as they do today. Nothing is renumbered, nothing
+new has to serve DHCP, and no device's behaviour changes unless you list it.
+
+What you get is the throughput: the flow arrives on one card and leaves on the
+other rather than crossing one port twice, so the halving in
+[troubleshooting.md](troubleshooting.md) goes away. If that is why you wanted a
+second card, **stop here** — the whole migration is `lan_if`, the uplink's
+address, and moving one cable. Skip to
+[The config change](#the-config-change) and ignore everything about subnets and
+DHCP.
+
+**Inline.** The box is the only way off the LAN. Every device is behind it
+whether it opts in or not, which is the point when you want the whole office
+covered and do not want to trust per-device settings. This costs a renumbered
+LAN and a new DHCP server, and the rest of this document is about paying it.
+
+The requirement either way is that `wan_if` has a genuinely separate path out:
+the two sides cannot share a network, and the validator refuses a config where
+they overlap.
+
+## What actually changes, inline
 
 One-armed, the box is a peer on the LAN and devices opt in by pointing at it.
-Two-armed, it is the LAN's gateway, and there is no opting in: `[policy].default`
+Inline, it is the LAN's gateway, and there is no opting in: `[policy].default`
 governs every device on that segment. Read yours before you start —
 
 ```bash
@@ -168,6 +201,33 @@ sudo scripts/deadman.sh disarm
 ## The config change
 
 Edit `gateway.toml`. Nothing else in the file changes.
+
+### Alongside — the box stays a LAN device
+
+Two added lines, and one changed. The LAN keeps every address it has, including
+this box's, so no `[[client]]` entry moves and nothing on the network notices.
+
+```toml
+[net]
+wan_if     = "enx00e04c680001"   # NEW card → the modem, or a second line
+lan_if     = "eth0"              # the built-in NIC, staying where it is
+lan_cidr   = "192.168.1.0/24"    # unchanged
+static_ip  = "192.168.1.2"       # unchanged — still what devices point at
+prefix_len = 24
+wan_dhcp   = true                # the uplink takes a lease
+```
+
+Note what is *not* here: `router` is gone. One-armed it named the LAN's router,
+which the box used as its own way out. It now has its own, so the key describes
+the uplink instead — and under `wan_dhcp` the lease carries it. The LAN's router
+carries on serving everything that has not opted in, and the gateway no longer
+has any opinion about it.
+
+The whole migration is then: apply, move the new card's cable to the modem, and
+`sudo gw check`. Nobody is renumbered and nobody's traffic changes. Skip
+[Moving the office across](#moving-the-office-across) entirely.
+
+### Inline — the box becomes the LAN's gateway
 
 ```toml
 [net]
