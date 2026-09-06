@@ -46,6 +46,31 @@ prefix_len = 24
 #wan_ip          = "10.0.0.2"
 #wan_prefix_len  = 24
 
+# --- more than one LAN subnet -----------------------------------------------
+#
+# A [[net.zone]] is a subnet this box SERVES but is not attached to: it sits
+# behind a router on the LAN segment, and the box reaches it through that
+# router. Each one becomes a static route plus membership of everything that
+# means "the LAN" — interception, the killswitch, DNS, the masquerade, SSH,
+# the tailnet routes it advertises, and which client addresses are accepted.
+#
+# `via` is the next hop and must be inside lan_cidr: it is the router on this
+# box's own segment, reached by ARP. A zone must not overlap lan_cidr, the
+# uplink, or another zone — overlapping routes are a choice the kernel makes
+# silently, and nftables refuses the overlapping set outright.
+#
+# Note what this widens: dns.ui_allow_cidrs and web.allow_cidrs default to
+# every network served, so adding a zone lets it reach the admin interfaces
+# unless you set those lists explicitly.
+#
+#[[net.zone]]
+#cidr = "192.168.20.0/24"
+#via  = "192.168.1.3"
+#
+#[[net.zone]]
+#cidr = "192.168.30.0/24"
+#via  = "192.168.1.3"
+
 [ipv6]
 # "off"  — disable v6 on wan_if and drop forwarded v6 (recommended, and what
 #          this setup is built around: opt-in-per-device cannot control a v6

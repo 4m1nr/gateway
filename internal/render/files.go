@@ -221,7 +221,7 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 		"WAN_IF":        c.WANIf,
 		"DEFINE_LAN_IF": defineLANIf,
 		"DEFINE_ROUTER": defineRouter,
-		"LAN_CIDR":      c.LANCidr,
+		"LAN_CIDR":      nftLAN(c),
 		"BOX_IP":        c.BoxIP,
 		"ROUTER":        c.Router,
 		"TPROXY_PORT":   strconv.Itoa(c.TproxyPort),
@@ -258,6 +258,29 @@ func NFT(c *config.Config, generatedAt time.Time) (string, error) {
 		"WAN_SPOOF_GUARD":     spoofGuard,
 		"SELF_OR_ROUTER":      selfOrRouter,
 	})
+}
+
+// nftLAN is what `define LAN` expands to: one prefix, or a set when zones make
+// "the LAN" more than one network.
+//
+// Every rule that serves the LAN matches $LAN — the interception catch-all, the
+// killswitch, the DNS accept and redirect, SSH, the masquerade — so widening
+// this one define is what makes a zone a served network rather than a stranger.
+func nftLAN(c *config.Config) string {
+	nets := c.LANNetworks()
+	if len(nets) == 1 {
+		return nets[0]
+	}
+	return "{ " + strings.Join(nets, ", ") + " }"
+}
+
+// zoneCIDRs lists the routed zones, in config order.
+func zoneCIDRs(c *config.Config) []string {
+	out := make([]string, 0, len(c.Zones))
+	for _, z := range c.Zones {
+		out = append(out, z.CIDR)
+	}
+	return out
 }
 
 func tailnetIf(cond bool) []string {
@@ -331,6 +354,26 @@ func Sysctl(c *config.Config) (string, error) {
 	})
 }
 
+// lanRoutes renders a [Route] for every routed zone, or "" when there are none.
+//
+// These belong on whichever unit holds the LAN address — the single card with
+// one NIC, the LAN card with two — because the next hop is a neighbour on that
+// segment. They are NOT a Gateway=: that key means the DEFAULT route, which
+// belongs to the internet-facing card and nowhere else. A second one here would
+// give the kernel two defaults and send some internet traffic at the LAN.
+func lanRoutes(c *config.Config) string {
+	if len(c.Zones) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, z := range c.Zones {
+		b.WriteString("\n[Route]\n")
+		fmt.Fprintf(&b, "Destination=%s\n", z.CIDR)
+		fmt.Fprintf(&b, "Gateway=%s\n", z.Via)
+	}
+	return b.String()
+}
+
 // noIPv6Note reads correctly for one card or two.
 func noIPv6Note(ifaces []string) string {
 	if len(ifaces) == 1 {
@@ -369,6 +412,14 @@ func Network(c *config.Config) (string, error) {
 			"UseDomains=no\n"
 	}
 
+	// One-armed, this unit holds the LAN address, so the zone routes belong
+	// here. Two-armed they go on the LAN unit instead, next to the address
+	// whose segment their next hop is on.
+	routes := ""
+	if !c.TwoArm {
+		routes = lanRoutes(c)
+	}
+
 	return subst(tpl, map[string]string{
 		"WAN_IF":           c.WANIf,
 		"WAN_ADDRESSING":   addressing,
@@ -377,6 +428,7 @@ func Network(c *config.Config) (string, error) {
 		"ROUTER":           c.Router,
 		"PREFIX_LEN":       strconv.Itoa(c.PrefixLen),
 		"IPV6_NETWORK":     v6,
+		"LAN_ROUTES":       routes,
 	})
 }
 
@@ -404,6 +456,7 @@ func NetworkLAN(c *config.Config) (string, error) {
 		"BOX_IP":       c.BoxIP,
 		"PREFIX_LEN":   strconv.Itoa(c.PrefixLen),
 		"IPV6_NETWORK": v6,
+		"LAN_ROUTES":   lanRoutes(c),
 	})
 }
 
@@ -427,6 +480,13 @@ func Env(c *config.Config, repo string) (string, error) {
 		// Empty single-armed, which is how every reader tells the two apart.
 		{"LAN_IF", c.LANIf},
 		{"LAN_CIDR", c.LANCidr},
+		// Every network the gateway serves, space separated: lan_cidr plus any
+		// routed zone. ip-rules.sh needs each one, because the reverse-path
+		// lookup it fixes up is per destination network.
+		{"LAN_NETWORKS", strings.Join(c.LANNetworks(), " ")},
+		// Only the routed ones, so `gw check` can look for a route per zone
+		// without having to know which of them is the attached segment.
+		{"LAN_ZONES", strings.Join(zoneCIDRs(c), " ")},
 		{"BOX_IP", c.BoxIP},
 		// Empty under wan_dhcp: the lease decides, so readers that need it ask
 		// the kernel for the default route instead.
@@ -504,7 +564,9 @@ func TailscaleArgs(c *config.Config) string {
 		args = append(args, "--advertise-exit-node")
 	}
 	if c.TSSubnetRouter {
-		args = append(args, "--advertise-routes="+c.LANCidr)
+		// Every served network, so a zone is reachable from the tailnet for the
+		// same reason the attached segment is.
+		args = append(args, "--advertise-routes="+strings.Join(c.LANNetworks(), ","))
 	}
 	return strings.Join(args, " ") + "\n"
 }

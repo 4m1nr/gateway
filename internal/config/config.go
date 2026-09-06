@@ -161,6 +161,9 @@ func (c *Config) parseNet(raw map[string]any) error {
 	if err := c.parseWAN(net); err != nil {
 		return err
 	}
+	if err := c.parseZones(net); err != nil {
+		return err
+	}
 
 	c.IPv6Mode = str(table(raw, "ipv6"), "mode", "off")
 	if c.IPv6Mode != "off" && c.IPv6Mode != "pass" {
@@ -270,6 +273,80 @@ func (c *Config) parseWAN(net map[string]any) error {
 		return errf("net.lan_cidr (%s) and the uplink network (%s) overlap — "+
 			"the two sides of a two-armed gateway must be different networks",
 			c.LANCidr, c.WANCidr)
+	}
+	return nil
+}
+
+// parseZones reads [[net.zone]]: LAN subnets behind a router on this segment.
+//
+// A zone is not a second address on this box. The box has no interface in it,
+// so what it needs is a route — and, everywhere else, to be counted as part of
+// the LAN. Without that a device in a zone is private space that is not local
+// here, which is exactly what the poisoned-DNS rule exists to drop.
+func (c *Config) parseZones(net map[string]any) error {
+	zones, err := tables(net, "zone")
+	if err != nil {
+		return err
+	}
+	for i, z := range zones {
+		where := fmt.Sprintf("net.zone[%d]", i)
+
+		cidr, err := needString(z, "cidr", where)
+		if err != nil {
+			return err
+		}
+		prefix, err := parsePrefix(cidr, where+".cidr")
+		if err != nil {
+			return err
+		}
+
+		viaStr, err := needString(z, "via", where)
+		if err != nil {
+			return err
+		}
+		via, err := parseAddr(viaStr, where+".via")
+		if err != nil {
+			return err
+		}
+		// The next hop has to be a neighbour: the box reaches it by ARP on the
+		// LAN, and a gateway it cannot reach directly is a route the kernel
+		// refuses to install.
+		if !c.LAN.Contains(via) {
+			return errf("%s.via (%s) is not inside net.lan_cidr (%s) — the next "+
+				"hop for a zone is the router on this box's own segment",
+				where, viaStr, c.LANCidr)
+		}
+		if viaStr == c.BoxIP {
+			return errf("%s.via (%s) is this box — a zone is reached through "+
+				"another router, not through itself", where, viaStr)
+		}
+
+		// Overlaps are refused rather than resolved. Two routes for the same
+		// space give the kernel a choice it makes silently, and nftables
+		// rejects overlapping intervals in the set these become outright.
+		if c.LAN.Contains(prefix.Addr()) || prefix.Contains(c.LAN.Addr()) {
+			return errf("%s.cidr (%s) overlaps net.lan_cidr (%s) — a zone is a "+
+				"DIFFERENT network, reached through a router on this one",
+				where, prefix, c.LANCidr)
+		}
+		if c.WANCidr != "" {
+			if wan, err := netip.ParsePrefix(c.WANCidr); err == nil {
+				if wan.Contains(prefix.Addr()) || prefix.Contains(wan.Addr()) {
+					return errf("%s.cidr (%s) overlaps the uplink network (%s)",
+						where, prefix, c.WANCidr)
+				}
+			}
+		}
+		for _, prev := range c.Zones {
+			if prev.Prefix.Contains(prefix.Addr()) || prefix.Contains(prev.Prefix.Addr()) {
+				return errf("%s.cidr (%s) overlaps net.zone %s",
+					where, prefix, prev.CIDR)
+			}
+		}
+
+		c.Zones = append(c.Zones, Zone{
+			CIDR: prefix.String(), Via: viaStr, Prefix: prefix,
+		})
 	}
 	return nil
 }
@@ -578,7 +655,7 @@ func (c *Config) parseDNS(raw map[string]any) error {
 		return err
 	}
 	c.UIAllow, err = allowList(dns, "ui_allow_cidrs", "dns.ui_allow_cidrs",
-		"AdGuard's admin interface", []string{c.LANCidr})
+		"AdGuard's admin interface", c.LANNetworks())
 	if err != nil {
 		return err
 	}
@@ -919,8 +996,9 @@ func (c *Config) parseClients(raw map[string]any) error {
 		if seen[ipStr] {
 			return errf("%s: duplicate client ip %s", where, ipStr)
 		}
-		if !c.LAN.Contains(addr) {
-			return errf("%s: %s is not inside net.lan_cidr", where, ipStr)
+		if !c.servesAddr(addr) {
+			return errf("%s: %s is not inside net.lan_cidr%s", where, ipStr,
+				zoneHint(c.Zones))
 		}
 		if ipStr == c.BoxIP || ipStr == c.Router {
 			return errf("%s: %s is the gateway or the router itself", where, ipStr)
@@ -1035,7 +1113,7 @@ func (c *Config) parseWeb(raw map[string]any) error {
 	// forwarding a port over SSH — and a setting that quietly does the opposite
 	// of what it says is worse than one that refuses.
 	c.WebAllow, err = allowList(w, "allow_cidrs", "web.allow_cidrs",
-		"the dashboard", []string{c.LANCidr, TailnetV4})
+		"the dashboard", append(c.LANNetworks(), TailnetV4))
 	if err != nil {
 		return err
 	}

@@ -166,6 +166,47 @@ ip -br link          # the new name should appear
 ethtool <name> | grep -i speed
 ```
 
+## If the LAN is more than one subnet
+
+Everything below says "the LAN" as though it were one network. If yours is
+several — a second floor, a warehouse, a guest network routed by an L3 switch —
+then `lan_cidr` is only the segment this box is *attached* to, and each of the
+others is a `[[net.zone]]`:
+
+```toml
+lan_cidr   = "192.168.10.0/24"   # the segment the box has an address on
+
+[[net.zone]]
+cidr = "192.168.20.0/24"
+via  = "192.168.10.2"            # the router on THIS segment that owns it
+
+[[net.zone]]
+cidr = "192.168.30.0/24"
+via  = "192.168.10.2"
+```
+
+This is not the same thing as a default gateway, and that distinction is the
+one people trip on. `Gateway=` in a networkd unit means the *default* route,
+which belongs to the internet-facing card and nowhere else — a second one on
+the LAN side would give the kernel two defaults and send some internet traffic
+at the LAN switch. A zone is a *static* route: "this specific network is over
+there". The gateway renders one `[Route]` per zone on whichever unit holds the
+LAN address, and leaves `Gateway=` alone.
+
+Declaring a zone also makes it count as LAN everywhere else — interception, the
+killswitch, DNS, the masquerade, SSH, the tailnet routes, and which `[[client]]`
+addresses are accepted. That last one matters during a migration: without the
+zone declared, `gw render` refuses a client in it as "not inside net.lan_cidr".
+
+Note that `dns.ui_allow_cidrs` and `web.allow_cidrs` default to every network
+served, so a zone can reach the admin interfaces unless you set those
+explicitly.
+
+Each zone needs its own DHCP arrangement, the same as the attached segment, and
+whatever serves it must hand out **that zone's router** as the gateway and
+**this box** as the DNS server. `sudo gw check` verifies a route exists per zone
+once you have applied.
+
 ## Before you start
 
 Find the second card and confirm the kernel sees it:
@@ -260,7 +301,10 @@ setting `wan_dhcp` is rejected too, rather than one of them being ignored.
 
 Any `[[client]]` entries are keyed to addresses on the old subnet and will be
 rejected as outside `lan_cidr`. Update them to the new addresses, or remove
-them and re-add once devices have moved.
+them and re-add once devices have moved. If a device lives in a routed zone
+rather than on the attached segment, declare the zone first — see
+[If the LAN is more than one subnet](#if-the-lan-is-more-than-one-subnet) —
+and its address is then accepted.
 
 Check it before it touches anything:
 
@@ -271,7 +315,9 @@ sudo gw diff       # exactly what would change on the box
 
 `gw diff` should show the new `15-gateway-lan.network`, a rewritten
 `10-gateway-wan.network`, an nftables ruleset with a `LAN_IF` define and a
-`wan-spoofed-lan` rule, and sysctl entries for both cards. If it shows anything
+`wan-spoofed-lan` rule, and sysctl entries for both cards. With zones declared,
+also a `[Route]` per zone on the LAN unit and a `define LAN` that is a set
+rather than a single prefix. If it shows anything
 about the uplink's address changing, you have mistyped `wan_ip`.
 
 ## Applying it

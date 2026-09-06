@@ -181,7 +181,7 @@ its own address:
 [net]
 wan_if     = "eth0"          # facing the internet
 lan_if     = "eth1"          # facing the office
-lan_cidr   = "192.168.10.0/24"
+lan_cidr   = "192.168.10.0/24"   # the segment this box is ON
 static_ip  = "192.168.10.1"  # this box — now the LAN's gateway
 prefix_len = 24
 
@@ -196,6 +196,35 @@ Setting `lan_if` changes what two of the keys above mean, and the validator
 enforces both: `static_ip` becomes the LAN's gateway, and `router` moves to the
 uplink network and must **not** be inside `lan_cidr` any more. Under `wan_dhcp`
 there is no `router` at all — naming one is rejected rather than ignored.
+
+### More than one LAN subnet
+
+`lan_cidr` is the network this box is *attached* to. A subnet behind a router on
+that segment — a second floor, a warehouse, a guest VLAN routed by an L3 switch
+— is a `[[net.zone]]`:
+
+```toml
+[[net.zone]]
+cidr = "192.168.20.0/24"
+via  = "192.168.1.3"      # the router on this box's segment that owns it
+```
+
+`via` must be inside `lan_cidr`, because the box reaches it by ARP on the wire
+it is actually on. Zones may not overlap each other, `lan_cidr`, or the uplink.
+
+Each zone becomes a static route *and* membership of everything that means "the
+LAN": interception, the killswitch, the DNS accept and redirect, the masquerade,
+SSH, the routes advertised to the tailnet, and which addresses `[[client]]` will
+accept. Without that last part a device in a zone is private space that is not
+local here — which the poisoned-DNS rule drops on sight, giving you a building
+with no internet and nothing in any log.
+
+Two things worth knowing. `dns.ui_allow_cidrs` and `web.allow_cidrs` default to
+every network served, so adding a zone lets it reach the admin interfaces unless
+you set those lists explicitly. And `sudo gw check` verifies a route exists per
+zone — a missing one is the quietest failure here, because the zone's devices
+still reach the box and every counter looks healthy while the replies go out the
+default route.
 
 ### DHCP stays where it is
 

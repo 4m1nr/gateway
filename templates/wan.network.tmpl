@@ -6,6 +6,6 @@ Name={{WAN_IF}}
 {{WAN_ADDRESSING}}# The box resolves through its own AdGuard instance, so its lookups are
 # filtered and split exactly like the LAN's.
 DNS=127.0.0.1
-{{IPV6_NETWORK}}{{WAN_DHCP_SECTION}}
+{{IPV6_NETWORK}}{{WAN_DHCP_SECTION}}{{LAN_ROUTES}}
 [Link]
 RequiredForOnline=routable

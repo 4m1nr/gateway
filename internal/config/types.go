@@ -47,6 +47,21 @@ type GeoSource struct {
 	Enabled bool
 }
 
+// Zone is a LAN subnet that is not directly attached to this box.
+//
+// It sits behind a router on the LAN segment and is reached through it. That
+// makes it a static route rather than a second address: the box has no
+// interface in the zone, and every rule that serves "the LAN" has to be told
+// the zone counts as LAN too, or devices there are seen as private space that
+// is not local here — which the poisoned-DNS rule drops on sight.
+type Zone struct {
+	CIDR string
+	// Via is the next hop, which must itself be inside lan_cidr: it is the
+	// router on this box's own segment that owns the zone.
+	Via    string
+	Prefix netip.Prefix
+}
+
 // Client is a per-address policy override.
 type Client struct {
 	IP     string
@@ -145,7 +160,10 @@ type Config struct {
 	// WANCidr is the uplink segment, when it is known at render time. Empty
 	// under DHCP. It is genuinely reachable private space, so it is kept out of
 	// the poisoned-DNS drop.
-	WANCidr  string
+	WANCidr string
+	// Zones are LAN subnets reached through a router on the LAN segment. Empty
+	// is the ordinary case: one directly attached network and nothing behind it.
+	Zones    []Zone
 	IPv6Mode string
 
 	// ---- xray ----

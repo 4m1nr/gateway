@@ -16,7 +16,7 @@ Address={{BOX_IP}}/{{PREFIX_LEN}}
 # The box resolves through its own AdGuard instance, so its lookups are
 # filtered and split exactly like the LAN's.
 DNS=127.0.0.1
-{{IPV6_NETWORK}}
+{{IPV6_NETWORK}}{{LAN_ROUTES}}
 [Link]
 # Not required for boot. A dark office switch must not hold the box offline —
 # it can still reach the tunnel, and networkd configures this link the moment

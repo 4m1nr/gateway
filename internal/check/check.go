@@ -292,6 +292,8 @@ func (r *Runner) checkLinks() {
 		r.ok("%s carries exactly %s, the address the LAN points at", lan, boxIP)
 	}
 
+	r.checkZones()
+
 	// Under wan_dhcp the config has no uplink address to compare against, so
 	// the question becomes whether a lease arrived at all.
 	if r.Env["ROUTER"] == "" {
@@ -299,6 +301,35 @@ func (r *Runner) checkLinks() {
 		r.verdict(strings.Contains(def, "default via"),
 			"the uplink has a default route from its lease",
 			"no default route on "+r.Env["WAN_IF"]+" — net.wan_dhcp is set but no lease arrived")
+	}
+}
+
+// checkZones proves the box can actually reach the LAN subnets it serves but is
+// not attached to.
+//
+// A missing route here is the quietest failure the gateway has. The zone's
+// devices reach the box fine, so DNS answers and the interception counters both
+// look healthy — but every reply is sent out the default route instead of back
+// through the LAN router, and the symptom is "the internet is broken for one
+// building" with nothing in any log.
+func (r *Runner) checkZones() {
+	zones := strings.Fields(r.Env["LAN_ZONES"])
+	if len(zones) == 0 {
+		return
+	}
+	routes, err := runOut(5*time.Second, "ip", "-4", "route", "show")
+	if err != nil {
+		r.bad("could not read the routing table: %v", err)
+		return
+	}
+	for _, zone := range zones {
+		if strings.Contains(routes, zone+" via ") {
+			r.ok("%s is routed (net.zone)", zone)
+		} else {
+			r.badf("Run `sudo gw apply`, then check `ip -4 route show`.",
+				"no route to %s — devices there reach this box, but their replies "+
+					"go out the default route instead of back to them", zone)
+		}
 	}
 }
 

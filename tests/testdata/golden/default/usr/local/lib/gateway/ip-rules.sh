@@ -49,8 +49,13 @@ case "${1:-up}" in
     # lookup for our own LAN to the main table, where it resolves to the real
     # interface. It changes nothing about where traffic goes: main already
     # routes the LAN over that interface.
-    ip rule list | grep -q "to $LAN_CIDR lookup main" \
-      || ip rule add to "$LAN_CIDR" lookup main pref 90
+    # Every network the gateway serves, not just the attached one. A routed
+    # zone needs the same fix-up: the reverse lookup for a device in it lands
+    # in the same wrong table, with the same invisible result.
+    for net in ${LAN_NETWORKS:-$LAN_CIDR}; do
+      ip rule list | grep -q "to $net lookup main" \
+        || ip rule add to "$net" lookup main pref 90
+    done
 
     # Belt and braces: with rp_filter off, accept_local makes the kernel skip
     # that reverse lookup entirely rather than depend on how it resolves.
@@ -60,7 +65,9 @@ case "${1:-up}" in
     ;;
   down)
     ip rule del fwmark "$MARK_TPROXY" lookup "$RT_TABLE" pref 100 2>/dev/null || true
-    ip rule del to "$LAN_CIDR" lookup main pref 90 2>/dev/null || true
+    for net in ${LAN_NETWORKS:-$LAN_CIDR}; do
+      ip rule del to "$net" lookup main pref 90 2>/dev/null || true
+    done
     ip route flush table "$RT_TABLE" 2>/dev/null || true
     ;;
   status)

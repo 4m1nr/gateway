@@ -63,7 +63,10 @@ func (c *Config) TailnetDirect() bool {
 func (c *Config) ProfileSources(name string) []string {
 	srcs := c.ClientsBy(name)
 	if c.DefaultPolicy == name {
-		srcs = append(srcs, c.LANCidr)
+		// Every network this gateway serves, not just the attached one: a
+		// device in a zone reaches Xray the same way and must match the same
+		// rule, or the default policy silently stops at the segment boundary.
+		srcs = append(srcs, c.LANNetworks()...)
 	}
 	if c.TSEnabled && c.TSExitPolicy == name {
 		srcs = append(srcs, TailnetV4)
@@ -76,6 +79,49 @@ func (c *Config) ProfileSources(name string) []string {
 // box's own traffic to a private address is local business.
 func (c *Config) BypassDst() []string {
 	return append([]string(nil), ReservedDst...)
+}
+
+// LANNetworks is every subnet this gateway serves: the directly attached one,
+// plus every routed zone. It is what "the LAN" means anywhere the answer has to
+// include devices that are not on this box's own segment.
+//
+// With no zones it is exactly [lan_cidr], so everything downstream renders as
+// it always did.
+func (c *Config) LANNetworks() []string {
+	if len(c.Zones) == 0 {
+		return []string{c.LANCidr}
+	}
+	out := []netip.Prefix{c.LAN}
+	for _, z := range c.Zones {
+		out = append(out, z.Prefix)
+	}
+	return collapsePrefixes(out)
+}
+
+// servesAddr reports whether an address is on a network this gateway serves.
+func (c *Config) servesAddr(addr netip.Addr) bool {
+	if c.LAN.Contains(addr) {
+		return true
+	}
+	for _, z := range c.Zones {
+		if z.Prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// zoneHint names the zones in an "outside the LAN" error, so the reader is not
+// left wondering whether zones were meant to count.
+func zoneHint(zones []Zone) string {
+	if len(zones) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(zones))
+	for _, z := range zones {
+		names = append(names, z.CIDR)
+	}
+	return " or any net.zone (" + strings.Join(names, ", ") + ")"
 }
 
 // NetworkLinks maps each interface this config addresses to the address it
@@ -214,6 +260,12 @@ func (c *Config) PoisonedDst() []string {
 		netip.MustParsePrefix("192.168.0.0/16"),
 	}
 	keep := []netip.Prefix{c.LAN}
+	// A routed zone is private space that IS local here — it is behind a router
+	// on this segment, and this box has a route to it. Left in the drop set,
+	// every device in it would be treated as a poisoned DNS answer.
+	for _, z := range c.Zones {
+		keep = append(keep, z.Prefix)
+	}
 	// Two-armed, the uplink segment is a second network this box is genuinely
 	// on. Dropping traffic to it as a poisoned answer would black-hole the
 	// office modem's own address — and under DHCP we do not know the segment,

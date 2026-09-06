@@ -96,6 +96,35 @@ file    = "outbounds/backup.json"`)
 		return b.subRE(t, regexp.MustCompile(`(?m)^default = "proxy"$`), `default = "direct"`)
 	})
 
+	// More than one LAN subnet: two zones behind a router on the segment. This
+	// is the shape where "the LAN" stops being one prefix, so it exercises the
+	// $LAN set, the static routes, the widened poisoned-DNS carve-out and a
+	// client listed at an address this box has no interface in.
+	b.derive("lan-zones", example, func(t string) string {
+		t = b.sub(t, `#[[net.zone]]
+#cidr = "192.168.20.0/24"
+#via  = "192.168.1.3"
+#
+#[[net.zone]]
+#cidr = "192.168.30.0/24"
+#via  = "192.168.1.3"`, `[[net.zone]]
+cidr = "192.168.20.0/24"
+via  = "192.168.1.3"
+
+[[net.zone]]
+cidr = "192.168.30.0/24"
+via  = "192.168.1.3"`)
+		// A device the box has no interface in the network of.
+		return b.sub(t, `[[client]]
+ip     = "192.168.1.99"`, `[[client]]
+ip     = "192.168.20.40"
+name   = "warehouse-pc"
+policy = "proxy"
+
+[[client]]
+ip     = "192.168.1.99"`)
+	})
+
 	b.derive("no-web", example, func(t string) string {
 		// Only the first: [web] is the first table with a bare `enabled`.
 		return b.subFirstRE(t, regexp.MustCompile(`(?m)^enabled = true$`), "enabled = false")
