@@ -8,12 +8,15 @@ Read the whole thing before starting. The short version:
 
 - **Do it at the console.** Not over SSH from the LAN, and not over the address
   you are about to change.
-- **The uplink never has to move.** The recommended path leaves the card that
-  faces the router exactly where it is, so the box keeps its own internet — and
-  your tailnet access — through the entire migration.
+- **The uplink segment never has to move.** The recommended path leaves the
+  router untouched on the network it already serves, so the box keeps its own
+  internet — and your tailnet access — whichever card you point at it.
 - **The office LAN gets a new subnet**, and something on it has to serve DHCP.
   This box does not. Sorting that out is the part that takes planning; the
   gateway change itself is four lines of config.
+- **Which card faces which way is your choice**, and it is only a choice about
+  which name goes on which config line. There is one argument for a preference
+  and it is in [Two decisions](#two-decisions-and-they-are-independent).
 
 ## What actually changes
 
@@ -32,42 +35,70 @@ including whatever printer or till or badge reader nobody thought about. That
 is usually the goal, but it should be a decision rather than a discovery, and
 the safe order is to convert on `direct` and flip the one line afterwards.
 
-## Choosing a layout
+## Two decisions, and they are independent
 
-Two ways to arrange it. They differ in what gets renumbered.
+### 1. Which card faces the internet
 
-### A. Renumber the LAN — recommended
+Purely a naming choice in the config — `wan_if` is the card facing the router,
+`lan_if` the one facing the office, and nothing else in the gateway cares which
+of them is the built-in NIC. Put the new card on either side.
+
+It is not quite free of consequence, though, and the consequence runs the
+opposite way to intuition. Both cards carry the same volume: traffic comes in
+one and goes out the other, so there is no "fast side" to give the better NIC
+to. What differs is what breaks when a card does.
+
+The uplink is the box's lifeline. Everything rides it — the tunnel, the
+tailnet, your remote access. If the uplink card drops, the box is stranded and
+you are driving over. If the LAN card drops, the office is offline but the box
+is still reachable and still diagnosable from anywhere.
+
+So if the new card is **USB**, there is a real argument for putting it on the
+LAN side: USB adapters reset, and power management drops them, in a way a
+soldered NIC does not. If it is **PCIe or M.2**, that argument mostly
+evaporates and you should wire whichever way suits the room.
+
+### 2. Which subnet gets renumbered
+
+The office and the uplink cannot share a network — the validator refuses a
+config where they overlap, because the kernel would have two routes for the
+same space and the firewall no way to tell the sides apart. Since both are
+`192.168.1.0/24` today, one of them has to move. This is a separate question
+from which card goes where, and either answer works with either wiring.
+
+**A. Renumber the LAN — recommended**
 
 ```
-   router 192.168.1.1                       unchanged
+   router 192.168.1.1                       unchanged, DHCP left on
         │
-   eth0 │ 192.168.1.2      the uplink now, same address it always had
+   wan  │ 192.168.1.2      the uplink now, or just wan_dhcp = true
    ┌─────────────┐
    │  gateway    │
    └─────────────┘
-   eth1 │ 192.168.10.1     a NEW subnet
+   lan  │ 192.168.10.1     a NEW subnet
         │
-      switch ── the office moves here, one device at a time
+      switch ── the office lives here
 ```
 
-The router does not change. The box's uplink does not change. You add a card,
-give it a new subnet, and move devices across at whatever pace suits you — a
-device still on the old switch keeps working exactly as it does today, because
-that segment is untouched.
+The router is not reconfigured at all. If the uplink takes a lease from it
+(`wan_dhcp = true`) there is nothing to set on either side of that link.
 
-The cost is that the office LAN is renumbered and needs its own DHCP server.
+The cost is that the office is renumbered and needs its own DHCP server.
 
-### B. Renumber the uplink — only if you cannot move devices
+**B. Renumber the uplink — only if you cannot renumber devices**
 
-Keep the office on 192.168.1.0/24 and move the *router* to a new segment
-(10.0.0.0/24, say), with its DHCP turned off. No device is renumbered, but the
-router has to be reconfigured, and during the switch nothing on the LAN has a
-route out. Use this when replugging every device is impossible and touching the
+Keep the office on `192.168.1.0/24` and move the *router* to a new segment
+(`10.0.0.0/24`, say). No device changes address, but the router has to be
+reconfigured. Use this when touching every desk is impossible and touching the
 router is not.
 
-The rest of this document follows **A**. For B, the only differences are that
-`lan_cidr` keeps its current value, `static_ip` becomes the address devices are
-already pointed at, and `wan_ip`/`router` describe the new upstream segment.
+Either way the office loses its DHCP server, because that server is the router
+and the router ends up on the far side of the box. See
+[Moving the office across](#moving-the-office-across).
+
+The rest of this document follows **A**, with the new card as the uplink. For
+B, `lan_cidr` keeps its current value, `static_ip` becomes the address devices
+are already pointed at, and `wan_ip`/`router` describe the new upstream segment.
 
 ## Getting the second card
 
@@ -140,26 +171,32 @@ Edit `gateway.toml`. Nothing else in the file changes.
 
 ```toml
 [net]
-wan_if     = "eth0"              # unchanged: still the card facing the router
-lan_if     = "enx00e04c680001"   # NEW: the card facing the office
+wan_if     = "enx00e04c680001"   # NEW card, plugged into the router
+lan_if     = "eth0"              # the built-in NIC, facing the office
 lan_cidr   = "192.168.10.0/24"   # NEW subnet for the office
 static_ip  = "192.168.10.1"      # this box, now the LAN's gateway
 prefix_len = 24
 
-# The uplink keeps the addressing it already had:
-wan_ip          = "192.168.1.2"  # what static_ip used to be
-wan_prefix_len  = 24
-router          = "192.168.1.1"  # unchanged
+# The uplink sits on the segment the router already serves, so let the router
+# hand it an address and there is nothing to keep in step:
+wan_dhcp   = true
+
+# Or pin it, if you would rather the box's uplink address never move. Then
+# router must be inside this network rather than inside lan_cidr:
+# wan_ip          = "192.168.1.2"   # what static_ip used to be
+# wan_prefix_len  = 24
+# router          = "192.168.1.1"   # unchanged
 ```
+
+Note which name is on which line. Swapping `wan_if` and `lan_if` produces a
+config that validates perfectly and a box that serves the office out of the
+router's port — everything unreachable, nothing saying why.
 
 Two things move meaning here and it is worth saying them out loud. `static_ip`
 was the box's address on the shared segment; it is now the LAN's gateway.
-`router` was inside `lan_cidr`; it is now on the uplink, and the validator will
-refuse the config if you leave it on the LAN side.
-
-If the uplink is handed out by the office's own DHCP instead, drop `wan_ip`,
-`wan_prefix_len` and `router` entirely and set `wan_dhcp = true`. Naming a
-router *and* setting `wan_dhcp` is rejected rather than silently ignored.
+`router` was inside `lan_cidr`; it is now on the uplink, and the validator
+refuses the config if you leave it on the LAN side. Naming a router *and*
+setting `wan_dhcp` is rejected too, rather than one of them being ignored.
 
 Any `[[client]]` entries are keyed to addresses on the old subnet and will be
 rejected as outside `lan_cidr`. Update them to the new addresses, or remove
@@ -255,10 +292,16 @@ sudo scripts/deadman.sh disarm
 ## Rolling back
 
 If it is going badly and you have console access, the fastest way back is the
-config: remove `lan_if`, `wan_ip` and `wan_prefix_len`, put `static_ip` and
-`router` back to their old values, and `sudo gw apply`. Apply removes the
-two-armed `.network` unit, puts the single card back on its old address, and
-strips the addresses the config no longer names.
+config. Put `[net]` back exactly as you recorded it at the start — and check
+`wan_if` in particular, because it is the line most easily left wrong. In the
+two-armed config it names the new card; one-armed it has to name the built-in
+NIC again, since that is the one the office is plugged into. Removing `lan_if`
+and leaving `wan_if` pointing at the new card gives you a one-armed gateway
+serving the office out of the wrong port: a valid config, and a dead box.
+
+Then `sudo gw apply`. It removes the two-armed `.network` unit, puts the single
+card back on its old address, and strips the addresses the config no longer
+names. Move the office cable back to the router's switch and it is as it was.
 
 If you have lost access to the box entirely, the deadman does it unattended —
 which is why it is armed at the top of this document. See
