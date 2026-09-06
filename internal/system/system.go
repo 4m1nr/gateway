@@ -89,46 +89,53 @@ func (s Systemd) Restart(unit string) error {
 }
 
 // ReconfigureLinks makes systemd-networkd adopt the freshly installed .network
-// files, and leaves each link carrying exactly the address the config names.
+// files.
 //
-// Both halves are needed, and the second is the surprising one. Installing a
-// .network file tells networkd nothing — the change appears at the next reboot
-// and not before. And when networkd does re-read it, it adds the new address
-// and KEEPS the old one: it does not withdraw an address merely because the
-// configuration that set it is gone. Renumbering a box therefore left the card
-// holding both addresses, the old one still answering, with nothing anywhere
-// saying which was meant to be there.
+// Installing one tells networkd nothing on its own: the change appears at the
+// next reboot and not before. This is the half that is disruptive — each link
+// goes down for a moment as it is reconfigured — which is why apply calls it
+// only when one of those files actually changed.
 //
-// links maps an interface to the address it should carry, as "10.0.0.2/24".
-// An empty value means the address comes from a lease; nothing is pruned there,
-// because there is no configured address to compare against.
-func (s Systemd) ReconfigureLinks(links map[string]string) ([]string, error) {
-	if len(links) == 0 {
-		return nil, nil
+// reload before reconfigure, and neither is a restart: restarting networkd
+// takes every link down at once, on a box whose LAN is served through it.
+func (s Systemd) ReconfigureLinks(links map[string]string) error {
+	names, ok := managedLinks(links)
+	if !ok {
+		return nil
 	}
-	// A box that does not use networkd has nothing to reconfigure, and that is
-	// not a failure: `gw apply` runs on boxes partway through bootstrap, before
-	// the switch to networkd has happened.
-	if _, err := exec.LookPath("networkctl"); err != nil {
-		return nil, nil
-	}
-	names := make([]string, 0, len(links))
-	for name := range links {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	// reload, not restart: a restart takes every link down for a moment, on a
-	// box whose LAN is served through it.
 	if _, err := s.run("networkctl", "reload"); err != nil {
-		return nil, err
+		return err
 	}
 	for _, name := range names {
 		if _, err := s.run("networkctl", "reconfigure", name); err != nil {
-			return nil, err
+			return err
 		}
 	}
+	return nil
+}
 
+// PruneLinkAddresses leaves each link carrying only the address the config
+// names, and returns the ones it removed.
+//
+// This is the surprising half. When networkd re-reads a .network file it adds
+// the new address and KEEPS the old one — it does not withdraw an address
+// merely because the configuration that set it is gone. Renumbering a box
+// therefore left the card holding both, the old one still answering, with
+// nothing anywhere saying which was meant to be there.
+//
+// Deleting an address that should not be on the link does not disturb one that
+// should, so unlike ReconfigureLinks this runs on every apply. A box that is
+// already carrying a leftover never changes its .network file again, and
+// gating this on such a change would mean it kept that address forever.
+//
+// links maps an interface to the address it should carry, as "10.0.0.2/24". An
+// empty value means the address comes from a lease; that link is left entirely
+// alone, because there is no configured address to judge it against.
+func (s Systemd) PruneLinkAddresses(links map[string]string) ([]string, error) {
+	names, ok := managedLinks(links)
+	if !ok {
+		return nil, nil
+	}
 	var removed []string
 	for _, name := range names {
 		want := links[name]
@@ -142,6 +149,28 @@ func (s Systemd) ReconfigureLinks(links map[string]string) ([]string, error) {
 		}
 	}
 	return removed, nil
+}
+
+// managedLinks returns the interface names in a stable order, and false when
+// there is nothing to act on.
+//
+// A box that does not use networkd is the "nothing to act on" case, and it is
+// not a failure: `gw apply` runs on boxes partway through bootstrap, before the
+// switch to networkd has happened. Nothing is pruned there either — without
+// networkd, this code has no claim to know what belongs on the link.
+func managedLinks(links map[string]string) ([]string, bool) {
+	if len(links) == 0 {
+		return nil, false
+	}
+	if _, err := exec.LookPath("networkctl"); err != nil {
+		return nil, false
+	}
+	names := make([]string, 0, len(links))
+	for name := range links {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, true
 }
 
 // pruneAddresses removes every permanent global IPv4 address on a link except

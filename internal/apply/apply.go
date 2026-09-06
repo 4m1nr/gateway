@@ -38,12 +38,19 @@ type System interface {
 	DaemonReload() error
 	// Restart restarts a unit.
 	Restart(unit string) error
-	// ReconfigureLinks re-reads the .network files and puts each named link on
-	// exactly the address the config gives it. links maps an interface name to
-	// the address it should carry ("10.0.0.2/24"); an empty value means the
-	// address comes from a lease, and nothing on that link may be pruned.
-	// Returns the addresses it removed, for reporting.
-	ReconfigureLinks(links map[string]string) ([]string, error)
+	// ReconfigureLinks makes networkd re-read the .network files and apply them
+	// to the named links. Disruptive: it briefly drops each link, so it is
+	// called only when one of those files actually changed.
+	ReconfigureLinks(links map[string]string) error
+	// PruneLinkAddresses removes any address a link carries that the config no
+	// longer names, and returns what it removed. links maps an interface name
+	// to the address it should carry ("10.0.0.2/24"); an empty value means the
+	// address comes from a lease, and nothing on that link is touched.
+	//
+	// Not disruptive — it only deletes what should not be there — so it runs on
+	// every apply rather than only when the config changed. An address left
+	// behind by an earlier renumbering is not something the box grows out of.
+	PruneLinkAddresses(links map[string]string) ([]string, error)
 	// Disable stops a unit and removes it from boot.
 	Disable(unit string) error
 	// EnableStack enables everything that is installed, for boot.
@@ -138,27 +145,41 @@ func Run(req Request) (*Plan, error) {
 		return plan, fmt.Errorf("enabling the gateway stack: %w", err)
 	}
 
-	// Renumbering. networkd is not told to re-read anything by installing a
-	// file, so before this the new address only appeared at the next reboot —
-	// and then appeared BESIDE the old one, because networkd does not withdraw
-	// an address just because the configuration that set it is gone. The card
-	// ends up carrying both, the old one still answering, and nothing in
-	// `gw apply` says which is meant to be there.
-	if networkChanged(plan) && len(req.Links) > 0 {
-		req.Report.report("links", "reconfiguring "+joinLinks(req.Links))
-		removed, err := req.System.ReconfigureLinks(req.Links)
+	// Renumbering, in two halves that are deliberately gated differently.
+	//
+	// networkd is not told to re-read anything by installing a file, so before
+	// this the new address only appeared at the next reboot — and then appeared
+	// BESIDE the old one, because networkd does not withdraw an address just
+	// because the configuration that set it is gone. The card ends up carrying
+	// both, the old one still answering, and nothing in `gw apply` says which
+	// is meant to be there.
+	//
+	// Making networkd re-read is disruptive, so it happens only when one of
+	// those files actually changed. Removing an address the config no longer
+	// names is not, so it happens every time: a box that already carries a
+	// leftover from an earlier renumbering never changes its .network file
+	// again, and would otherwise keep that address forever.
+	if len(req.Links) > 0 {
+		if networkChanged(plan) {
+			req.Report.report("links", "reconfiguring "+joinLinks(req.Links))
+			if err := req.System.ReconfigureLinks(req.Links); err != nil {
+				// Not fatal, and deliberately so: this runs AFTER the tree is
+				// installed, so returning here would leave the files written
+				// and the firewall never reloaded — strictly worse than a card
+				// that keeps its old address until someone looks. Said plainly
+				// instead, because a silent half-renumbering is the thing this
+				// step exists to prevent.
+				req.Report.report("links", "could not reconfigure the links: "+err.Error()+
+					" — check `ip -br addr`; the card may still be on its old address")
+			}
+		}
+		removed, err := req.System.PruneLinkAddresses(req.Links)
 		for _, addr := range removed {
 			req.Report.report("links", "removed the stale address "+addr)
 		}
 		if err != nil {
-			// Not fatal, and deliberately so: this runs AFTER the tree is
-			// installed, so returning here would leave the files written and
-			// the firewall never reloaded — strictly worse than a card that
-			// keeps its old address until someone looks. Said plainly instead,
-			// because a silent half-renumbering is the thing this step exists
-			// to prevent.
-			req.Report.report("links", "could not reconfigure the links: "+err.Error()+
-				" — check `ip -br addr`; the card may still be on its old address")
+			req.Report.report("links", "could not check the link addresses: "+err.Error()+
+				" — compare `ip -br addr` against [net] by hand")
 		}
 	}
 

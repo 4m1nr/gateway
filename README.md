@@ -694,9 +694,12 @@ when you need it. Client traffic stays fail-closed regardless.
 - **Renumbering takes effect on `gw apply`.** Installing a `.network` file tells
   networkd nothing on its own, and when it does re-read one it adds the new
   address and keeps the old — so changing `static_ip` used to leave the card
-  carrying both, the old one still answering. Apply now reconfigures the link
-  and removes the address the config no longer names, reporting each one it
-  drops. An address from a DHCP lease is never touched.
+  carrying both, the old one still answering. Apply now makes networkd re-read
+  the files it just rewrote, and separately removes any address the config no
+  longer names, reporting each one it drops. The re-read only happens when one
+  of those files changed, because it briefly drops the link; the address check
+  runs every time, because a card already carrying a leftover never changes its
+  `.network` file again. An address from a DHCP lease is never touched.
 - **AdGuard's admin password** is the one thing not managed here — a password
   hash doesn't belong in a git repo. Set it in the web UI; `gw apply` leaves it
   and anything else you set there alone.

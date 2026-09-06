@@ -34,14 +34,22 @@ func (s *recordingSystem) Disable(u string) error {
 	return nil
 }
 func (s *recordingSystem) EnableStack() error { s.calls = append(s.calls, "enable-stack"); return nil }
-func (s *recordingSystem) ReconfigureLinks(links map[string]string) ([]string, error) {
+func (s *recordingSystem) ReconfigureLinks(links map[string]string) error {
+	s.calls = append(s.calls, "reconfigure:"+sortedNames(links))
+	return nil
+}
+func (s *recordingSystem) PruneLinkAddresses(links map[string]string) ([]string, error) {
+	s.calls = append(s.calls, "prune:"+sortedNames(links))
+	return s.removed, nil
+}
+
+func sortedNames(links map[string]string) string {
 	names := make([]string, 0, len(links))
 	for name := range links {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	s.calls = append(s.calls, "reconfigure:"+strings.Join(names, ","))
-	return s.removed, nil
+	return strings.Join(names, ",")
 }
 
 func stagedRequest(t *testing.T, root string) Request {
@@ -223,14 +231,47 @@ func TestNetworkChangeReconfiguresLinks(t *testing.T) {
 		t.Fatalf("the pruned address was not reported: %v", steps)
 	}
 
-	// Second apply: nothing changed, so the link must be left alone.
-	sys2 := &recordingSystem{}
+	// Second apply: nothing changed, so networkd must be left alone — but the
+	// addresses are still checked. A box already carrying a leftover from an
+	// earlier renumbering never changes its .network file again, so gating the
+	// check on such a change would mean it kept that address forever.
+	sys2 := &recordingSystem{removed: []string{"eth0 192.168.1.2/24"}}
 	req.System = sys2
 	if _, err := Run(req); err != nil {
 		t.Fatalf("second apply: %v", err)
 	}
 	if containsCall(sys2.calls, "reconfigure:eth0") {
 		t.Fatalf("nothing changed but the link was reconfigured anyway: %v", sys2.calls)
+	}
+	if !containsCall(sys2.calls, "prune:eth0") {
+		t.Fatalf("an unchanged apply skipped the address check: %v", sys2.calls)
+	}
+}
+
+// The case the split exists for: a box whose config has not changed, but whose
+// card is carrying an address from a renumbering that predates the fix.
+func TestUnchangedApplyStillDropsALeftoverAddress(t *testing.T) {
+	root := t.TempDir()
+	stageDir, files := stage(t, map[string]string{
+		"etc/gateway/web.json": "{}\n",
+	})
+	sys := &recordingSystem{removed: []string{"eth0 192.168.1.9/24"}}
+	var steps []string
+	if _, err := Run(Request{
+		Files:    files,
+		StageDir: stageDir,
+		Links:    map[string]string{"eth0": "192.168.1.2/24"},
+		Options:  Options{Root: root},
+		System:   sys,
+		Report:   func(s Step) { steps = append(steps, s.Name+": "+s.Detail) },
+	}); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if containsCall(sys.calls, "reconfigure:eth0") {
+		t.Fatalf("no .network file changed, so networkd should not have been touched: %v", sys.calls)
+	}
+	if !containsStep(steps, "removed the stale address eth0 192.168.1.9/24") {
+		t.Fatalf("the leftover address was not reported as removed: %v", steps)
 	}
 }
 
