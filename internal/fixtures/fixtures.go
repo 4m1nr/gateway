@@ -125,6 +125,22 @@ policy = "proxy"
 ip     = "192.168.1.99"`)
 	})
 
+	// A summary zone: one route covering every other subnet in the space, with
+	// the attached segment inside it. collapsePrefixes reduces the pair to the
+	// supernet, so $LAN ends up a single broad prefix rather than a set -- the
+	// opposite shape from lan-zones, and the one longest-prefix match resolves.
+	b.derive("lan-zone-summary", example, func(t string) string {
+		return b.sub(t, `#[[net.zone]]
+#cidr = "192.168.20.0/24"
+#via  = "192.168.1.3"
+#
+#[[net.zone]]
+#cidr = "192.168.30.0/24"
+#via  = "192.168.1.3"`, `[[net.zone]]
+cidr = "192.168.0.0/16"
+via  = "192.168.1.3"`)
+	})
+
 	b.derive("no-web", example, func(t string) string {
 		// Only the first: [web] is the first table with a bare `enabled`.
 		return b.subFirstRE(t, regexp.MustCompile(`(?m)^enabled = true$`), "enabled = false")

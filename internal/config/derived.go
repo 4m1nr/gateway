@@ -310,6 +310,27 @@ func (c *Config) PoisonedDst() []string {
 	return out
 }
 
+// overlaps reports whether two prefixes share any address at all.
+func overlaps(a, b netip.Prefix) bool {
+	return a.Contains(b.Addr()) || b.Contains(a.Addr())
+}
+
+// summarises reports whether outer STRICTLY contains inner — a summary route,
+// which longest-prefix match resolves without ambiguity, rather than an overlap
+// the kernel would have to guess about. Equal prefixes are not a summary.
+func summarises(outer, inner netip.Prefix) bool {
+	return outer.Bits() < inner.Bits() && outer.Contains(inner.Addr())
+}
+
+// summaryOf names the smallest useful supernet of a prefix, for the error that
+// suggests one.
+func summaryOf(p netip.Prefix) string {
+	if p.Bits() <= 8 || !p.Addr().Is4() {
+		return "a broader prefix"
+	}
+	return netip.PrefixFrom(p.Addr(), p.Bits()-8).Masked().String()
+}
+
 // subnetOf reports whether inner lies entirely within outer.
 func subnetOf(inner, outer netip.Prefix) bool {
 	return inner.Bits() >= outer.Bits() && outer.Contains(inner.Addr())

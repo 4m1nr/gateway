@@ -321,26 +321,46 @@ func (c *Config) parseZones(net map[string]any) error {
 				"another router, not through itself", where, viaStr)
 		}
 
-		// Overlaps are refused rather than resolved. Two routes for the same
-		// space give the kernel a choice it makes silently, and nftables
-		// rejects overlapping intervals in the set these become outright.
-		if c.LAN.Contains(prefix.Addr()) || prefix.Contains(c.LAN.Addr()) {
-			return errf("%s.cidr (%s) overlaps net.lan_cidr (%s) — a zone is a "+
-				"DIFFERENT network, reached through a router on this one",
-				where, prefix, c.LANCidr)
+		// Overlap is allowed in exactly one direction: a zone may be BROADER
+		// than a network already served, and never narrower or equal.
+		//
+		// Broader is a summary route, and it is the normal way to say "the rest
+		// of this space is over there". "172.30.0.0/16 via the LAN's router"
+		// beside an attached 172.30.4.0/24 is unambiguous — longest-prefix
+		// match puts the local segment on the wire and everything else through
+		// the router — and collapsePrefixes reduces the pair to the /16 for the
+		// firewall, which is what nftables needs anyway since it rejects
+		// overlapping intervals in a set.
+		//
+		// Narrower or equal is refused. It would quietly take a slice of the
+		// attached segment away from the wire it is on, and is far more often a
+		// typo than something anyone meant.
+		if overlaps(prefix, c.LAN) && !summarises(prefix, c.LAN) {
+			return errf("%s.cidr (%s) is inside net.lan_cidr (%s) — that would "+
+				"route part of this box's own segment through another router. "+
+				"A zone is either a different network, or a summary that "+
+				"CONTAINS the segment (%s would be fine)",
+				where, prefix, c.LANCidr, summaryOf(c.LAN))
 		}
-		if c.WANCidr != "" {
-			if wan, err := netip.ParsePrefix(c.WANCidr); err == nil {
-				if wan.Contains(prefix.Addr()) || prefix.Contains(wan.Addr()) {
-					return errf("%s.cidr (%s) overlaps the uplink network (%s)",
-						where, prefix, c.WANCidr)
-				}
+		// The uplink is never summarised: pointing any part of it at a router on
+		// the LAN sends the box's own way out back at the network it serves.
+		//
+		// Two-armed only. With one card the uplink IS the LAN, so this would
+		// re-run the check above without the summary exemption and make a
+		// summary route impossible on exactly the boxes most likely to want one.
+		if c.TwoArm && c.WANCidr != "" {
+			if wan, err := netip.ParsePrefix(c.WANCidr); err == nil && overlaps(prefix, wan) {
+				return errf("%s.cidr (%s) overlaps the uplink network (%s) — the "+
+					"way out cannot be reached through the LAN", where, prefix, c.WANCidr)
 			}
 		}
+		// Only an exact duplicate is wrong. Two CIDR prefixes that share any
+		// address always have one containing the other, so every other overlap
+		// here is a summary and a longer route beside it — which is what
+		// longest-prefix match is for.
 		for _, prev := range c.Zones {
-			if prev.Prefix.Contains(prefix.Addr()) || prefix.Contains(prev.Prefix.Addr()) {
-				return errf("%s.cidr (%s) overlaps net.zone %s",
-					where, prefix, prev.CIDR)
+			if prefix == prev.Prefix {
+				return errf("%s.cidr (%s) is already declared as a zone", where, prefix)
 			}
 		}
 
