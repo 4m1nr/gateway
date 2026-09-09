@@ -469,22 +469,16 @@ func cmdBench(args []string) error {
 }
 
 func printBench(b diag.BenchResult) {
-	speed := "?"
-	if b.LinkSpeed > 0 {
-		speed = strconv.Itoa(b.LinkSpeed)
+	// One card means every intercepted packet crosses it twice, so the usable
+	// ceiling is half what it negotiated. Two cards carry each direction once,
+	// and the ceiling is simply the slower card — a different warning, and on a
+	// two-armed box the halving one is just wrong.
+	if b.LAN == nil {
+		printLink(b.WAN, "", true)
+	} else {
+		printLink(b.WAN, "uplink", false)
+		printLink(*b.LAN, "LAN", false)
 	}
-	fmt.Printf("  %s: %s Mb/s %s\n", b.Interface, speed, b.Duplex)
-	if b.LinkSpeed > 0 && b.LinkSpeed <= 100 {
-		fmt.Printf("  %s\n", cli.Yellow("! One NIC carries intercepted traffic TWICE — in from the client"))
-		fmt.Printf("    %s\n", cli.Yellow(fmt.Sprintf(
-			"and out to the internet — so a %d Mb/s link caps clients at about", b.LinkSpeed)))
-		fmt.Printf("    %s\n", cli.Yellow(fmt.Sprintf(
-			"%d Mb/s. That alone explains a halving.", b.LinkSpeed/2)))
-	}
-	if b.Duplex == "half" {
-		fmt.Printf("  %s\n", cli.Red("! HALF DUPLEX — almost always a bad cable or a forced port speed"))
-	}
-	fmt.Printf("  errors/drops: rx_drop=%d tx_drop=%d\n", b.RxDrop, b.TxDrop)
 
 	fmt.Printf("\n%s\n", cli.Green("== cpu =="))
 	fmt.Printf("  cores: %d   model: %s\n", b.Cores, b.CPUModel)
@@ -498,17 +492,54 @@ func printBench(b diag.BenchResult) {
 	fmt.Printf("\n%s\n", cli.Green("== throughput =="))
 	fmt.Printf("  direct (bypassing the tunnel): %.1f Mb/s  (%d bytes)\n", b.DirectMbps, b.DirectBytes)
 	fmt.Printf("  through the tunnel           : %.1f Mb/s  (%d bytes)\n", b.TunnelMbps, b.TunnelBytes)
-	if b.CPUBusyPct >= 0 {
-		fmt.Printf("  cpu busy during the test     : %d%%\n", b.CPUBusyPct)
+	if b.CPUPeakPct >= 0 {
+		fmt.Printf("  busiest core during the test : %d%% (of %d cores)\n", b.CPUPeakPct, b.Cores)
 	}
 	if b.DirectMbps > 0 && b.TunnelMbps > 0 {
 		fmt.Printf("  tunnel is %.0f%% of direct\n", b.Ratio())
 	}
 	fmt.Printf("  -> %s\n", b.Verdict())
 
-	fmt.Print(`
+	// Only on a single-armed box. Told to someone who already has two cards it
+	// contradicts the verdict directly above it, which has just finished
+	// explaining that traffic does not hairpin here.
+	if b.LAN == nil {
+		fmt.Print(`
 If clients are slower than this box, the difference is the LAN leg, not Xray:
 intercepted traffic crosses the single NIC twice. A second NIC (a USB 3.0
 gigabit adapter) removes that ceiling entirely.
 `)
+	}
+}
+
+// printLink reports one card. hairpin says whether intercepted traffic crosses
+// this card in both directions, which is what halves the usable speed.
+func printLink(l diag.BenchLink, role string, hairpin bool) {
+	speed := "?"
+	if l.Speed > 0 {
+		speed = strconv.Itoa(l.Speed)
+	}
+	name := l.Interface
+	if role != "" {
+		name += " (" + role + ")"
+	}
+	fmt.Printf("  %-17s %s Mb/s %s   rx_drop=%d tx_drop=%d\n",
+		name+":", speed, l.Duplex, l.RxDrop, l.TxDrop)
+
+	if l.Speed > 0 && l.Speed <= 100 {
+		if hairpin {
+			fmt.Printf("  %s\n", cli.Yellow("! One NIC carries intercepted traffic TWICE — in from the client"))
+			fmt.Printf("    %s\n", cli.Yellow(fmt.Sprintf(
+				"and out to the internet — so a %d Mb/s link caps clients at about", l.Speed)))
+			fmt.Printf("    %s\n", cli.Yellow(fmt.Sprintf(
+				"%d Mb/s. That alone explains a halving.", l.Speed/2)))
+		} else {
+			fmt.Printf("  %s\n", cli.Yellow(fmt.Sprintf(
+				"! %s negotiated %d Mb/s — that caps every client crossing it, "+
+					"whatever the tunnel manages", l.Interface, l.Speed)))
+		}
+	}
+	if l.Duplex == "half" {
+		fmt.Printf("  %s\n", cli.Red("! HALF DUPLEX — almost always a bad cable or a forced port speed"))
+	}
 }
