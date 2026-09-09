@@ -9,6 +9,7 @@ package check
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -261,6 +262,10 @@ func (r *Runner) checkPlumbing() {
 // uplink. And an address that is not the one the config names means a previous
 // renumbering left the old one behind — the card answers on both, half the
 // devices reach the gateway they were told about, and nothing says why.
+//
+// Link-local addresses are pulled out before any of that is judged, because
+// they are not this config's residue at all and the advice for them is the
+// opposite one. See foreignDHCPVerdict.
 func (r *Runner) checkLinks() {
 	lan := r.Env["LAN_IF"]
 	if lan == "" {
@@ -274,7 +279,10 @@ func (r *Runner) checkLinks() {
 			"%s does not exist — the LAN side of the gateway is not there", lan)
 		return
 	}
-	addrs := inetAddrs(out)
+	addrs, squatted := splitLinkLocal(inetAddrs(out))
+	if len(squatted) > 0 {
+		r.foreignDHCPVerdict(lan, squatted)
+	}
 	switch {
 	case len(addrs) == 0:
 		r.bad("%s has no address — every device on the LAN is pointed at a "+
@@ -301,6 +309,42 @@ func (r *Runner) checkLinks() {
 		r.verdict(strings.Contains(def, "default via"),
 			"the uplink has a default route from its lease",
 			"no default route on "+r.Env["WAN_IF"]+" — net.wan_dhcp is set but no lease arrived")
+	}
+}
+
+// foreignDHCPVerdict reports a 169.254.0.0/16 address on a card networkd owns.
+//
+// That range is RFC 3927: the address a DHCP client assigns itself when its
+// request goes unanswered. On the LAN side the request is never going to be
+// answered — this box is the segment's gateway, not a client on it — so a
+// second network manager left running on the card asks, times out, and stamps
+// a link-local address, with a different one each time round.
+//
+// Kept apart from the renumbering leftover below because the two want opposite
+// responses. A leftover is this config's own residue and `gw apply` prunes it;
+// this belongs to a live daemon that re-adds it seconds later, so pruning
+// achieves nothing and naming `gw apply` as the fix sends the reader round a
+// loop that cannot close. system.staleAddrs skips the range for the same
+// reason: an address nothing here can keep deleted is not this tool's to
+// delete.
+func (r *Runner) foreignDHCPVerdict(lan string, addrs []string) {
+	r.badf("Find the client and stop it — `pgrep -a dhcpcd`, then\n"+
+		"`systemctl status <pid>` for the unit that started it, then disable\n"+
+		"that unit. `gw apply` cannot clear this: the address returns within\n"+
+		"seconds of being deleted.",
+		"%s carries the link-local address %s — a second DHCP client is managing "+
+			"this card alongside networkd", lan, strings.Join(addrs, ", "))
+
+	// The same fallback installs a default route sourced from that address.
+	// Its metric is high enough that it steals no traffic, so nothing breaks
+	// outright — but each rotation of the address rewrites the route, and
+	// tailscaled reads every rewrite as a link change and rebinds. Reported
+	// separately because it survives deleting the address by hand, which is
+	// the first thing anyone tries.
+	def, _ := runOut(5*time.Second, "ip", "-4", "route", "show", "default", "dev", lan)
+	if strings.Contains(def, "scope link") {
+		r.bad("%s also carries that client's link-scope default route — "+
+			"tailscaled rebinds every time the address rotates", lan)
 	}
 }
 
@@ -345,6 +389,33 @@ func inetAddrs(out string) []string {
 		}
 	}
 	return addrs
+}
+
+// splitLinkLocal separates the addresses a config could have set from the
+// 169.254.0.0/16 ones, which nothing in this project ever sets.
+func splitLinkLocal(addrs []string) (configured, linkLocal []string) {
+	for _, a := range addrs {
+		if isLinkLocal(a) {
+			linkLocal = append(linkLocal, a)
+			continue
+		}
+		configured = append(configured, a)
+	}
+	return configured, linkLocal
+}
+
+// isLinkLocal reports whether a CIDR from `ip -o addr` is in 169.254.0.0/16.
+//
+// The scope column cannot answer this. dhcpcd lists its IPv4LL address as
+// `scope global noprefixroute`, so `ip ... scope global` returns it and a
+// filter written against the scope keyword lets it through as an ordinary
+// address — which is exactly how it came to be read as a renumbering leftover.
+func isLinkLocal(cidr string) bool {
+	p, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return false
+	}
+	return p.Addr().IsLinkLocalUnicast()
 }
 
 // containsAddr reports whether any of the CIDRs carries the given address.

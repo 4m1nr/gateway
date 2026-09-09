@@ -8,6 +8,7 @@ package system
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/user"
@@ -175,32 +176,61 @@ func managedLinks(links map[string]string) ([]string, bool) {
 
 // pruneAddresses removes every permanent global IPv4 address on a link except
 // the one the config names.
-//
-// Scoped tightly on purpose. Only IPv4, only global scope — link-local and the
-// loopback range are the kernel's business. And never a "dynamic" address: that
-// came from a lease rather than from this config, so there is no configured
-// value it can be judged against, and deleting it would cut the uplink on a box
-// running wan_dhcp.
 func (s Systemd) pruneAddresses(iface, want string) ([]string, error) {
 	out, err := s.run("ip", "-4", "-o", "addr", "show", "dev", iface, "scope", "global")
 	if err != nil {
 		return nil, err
 	}
 	var removed []string
-	for _, line := range strings.Split(out, "\n") {
-		if strings.TrimSpace(line) == "" || strings.Contains(line, " dynamic ") {
-			continue
-		}
-		addr := inetAddr(line)
-		if addr == "" || addr == want {
-			continue
-		}
+	for _, addr := range staleAddrs(out, want) {
 		if _, err := s.run("ip", "addr", "del", addr, "dev", iface); err != nil {
 			return removed, err
 		}
 		removed = append(removed, iface+" "+addr)
 	}
 	return removed, nil
+}
+
+// staleAddrs picks out the addresses in `ip -4 -o addr` output that the config
+// no longer names.
+//
+// Scoped tightly on purpose. Only IPv4, and never a "dynamic" address: that one
+// came from a lease rather than from this config, so there is no configured
+// value to judge it against, and deleting it would cut the uplink on a box
+// running wan_dhcp.
+//
+// Link-local is excluded for a different reason. 169.254.0.0/16 is never
+// something this config set, so it cannot be a leftover of one — it is a second
+// DHCP client on the link falling back after an unanswered request, and that
+// client re-adds the address within seconds of it being deleted. Deleting it
+// here would make every apply report a removal that did not last and hide the
+// only fault worth reporting. `gw check` names it instead; see
+// check.foreignDHCPVerdict.
+//
+// The scope column cannot be used to spot it: dhcpcd lists its IPv4LL address
+// as `scope global noprefixroute`, so it arrives in this output like any other.
+func staleAddrs(out, want string) []string {
+	var stale []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == "" || strings.Contains(line, " dynamic ") {
+			continue
+		}
+		addr := inetAddr(line)
+		if addr == "" || addr == want || isLinkLocal(addr) {
+			continue
+		}
+		stale = append(stale, addr)
+	}
+	return stale
+}
+
+// isLinkLocal reports whether a CIDR from `ip -o addr` is in 169.254.0.0/16.
+func isLinkLocal(cidr string) bool {
+	p, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		return false
+	}
+	return p.Addr().IsLinkLocalUnicast()
 }
 
 // inetAddr pulls the CIDR out of one `ip -o addr` line, or "" if there is none.
