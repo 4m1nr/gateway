@@ -1,5 +1,7 @@
 # Gateway
 
+[![tests](https://github.com/4m1nr/gateway/actions/workflows/tests.yml/badge.svg)](https://github.com/4m1nr/gateway/actions/workflows/tests.yml)
+
 An HP thin client turned into a **selective transparent gateway**. Devices that
 opt in point their default gateway at it, and everything they send is routed
 through a remote Xray XHTTP tunnel — no per-app proxy settings, no client
